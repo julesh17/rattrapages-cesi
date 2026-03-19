@@ -509,3 +509,75 @@ else:
                              transition:all 0.2s;">
                       📋 Copier le mail
                     </button>""", unsafe_allow_html=True)
+
+# ─── RÉCAP CONVOCATIONS – MAIL CLASSE ───────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-title">📣 Récap convocations — mail à la classe</div>', unsafe_allow_html=True)
+
+if filtered_df.empty or not recap_rows:
+    st.info("Aucune donnée à afficher — ajustez les filtres.")
+else:
+    # Construire le texte du récap
+    lines = ["Bonjour à tous,",
+             "",
+             "Voici le récapitulatif des rattrapages par matière :",
+             ""]
+
+    for r in recap_rows:
+        all_students = r["eleves_c"] + r["eleves_d"]
+        noms_liste   = ", ".join(all_students)
+        lines.append(f"• {r['Matière']} : {noms_liste}")
+
+    lines += [
+        "",
+        "Les étudiants concernés sont invités à se présenter aux sessions de rattrapage "
+        "dont les modalités leur seront communiquées prochainement.",
+        "",
+        "Bien cordialement,",
+        "L'équipe pédagogique",
+    ]
+
+    recap_classe_text = "\n".join(lines)
+
+    # Affichage + édition
+    edited_recap = st.text_area(
+        "Contenu du mail (modifiable) :",
+        value=recap_classe_text,
+        height=320,
+        key="recap_classe_textarea",
+    )
+
+    import base64
+    dl_col2, copy_col2 = st.columns([2, 1])
+    with dl_col2:
+        st.download_button(
+            label="⬇️ Télécharger (.txt)",
+            data=edited_recap.encode("utf-8"),
+            file_name="recap_convocations_classe.txt",
+            mime="text/plain",
+            key="dl_recap_classe",
+        )
+    with copy_col2:
+        b64_recap = base64.b64encode(edited_recap.encode("utf-8")).decode()
+        st.markdown(f"""
+        <button id="copy_recap_classe"
+          onclick="
+            var txt = atob('{b64_recap}');
+            navigator.clipboard.writeText(txt).then(function() {{
+              var btn = document.getElementById('copy_recap_classe');
+              btn.innerText = '✅ Copié !';
+              btn.style.background = '#d1fae5';
+              btn.style.color = '#065f46';
+              setTimeout(function() {{
+                btn.innerText = '📋 Copier le mail';
+                btn.style.background = '#ede9fe';
+                btn.style.color = '#4f46e5';
+              }}, 2000);
+            }});
+          "
+          style="width:100%;padding:8px 12px;border:1px solid #c4b5fd;
+                 border-radius:8px;background:#ede9fe;color:#4f46e5;
+                 font-weight:600;font-size:0.85rem;cursor:pointer;
+                 transition:all 0.2s;">
+          📋 Copier le mail
+        </button>""", unsafe_allow_html=True)
