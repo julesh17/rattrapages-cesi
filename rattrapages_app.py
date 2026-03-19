@@ -346,72 +346,92 @@ st.markdown("---")
 st.markdown('<div class="section-title">📊 Récapitulatif des matières en rattrapage</div>', unsafe_allow_html=True)
 
 if not filtered_df.empty:
-    # Pour chaque matière : compter les C et D séparément
     recap_rows = []
     for col in eval_display_cols:
-        nb_c = (filtered_df[col] == "C").sum()
-        nb_d = (filtered_df[col] == "D").sum()
-        total = nb_c + nb_d
+        eleves_c = [
+            f"{row['Prénom']} {row['Nom']}"
+            for _, row in filtered_df.iterrows()
+            if str(row.get(col, "")).strip() == "C"
+        ]
+        eleves_d = [
+            f"{row['Prénom']} {row['Nom']}"
+            for _, row in filtered_df.iterrows()
+            if str(row.get(col, "")).strip() == "D"
+        ]
+        total = len(eleves_c) + len(eleves_d)
         if total > 0:
-            recap_rows.append({"Matière": col, "nb_c": nb_c, "nb_d": nb_d, "total": total})
+            recap_rows.append({
+                "Matière": col,
+                "eleves_c": eleves_c, "nb_c": len(eleves_c),
+                "eleves_d": eleves_d, "nb_d": len(eleves_d),
+                "total": total,
+            })
 
     if not recap_rows:
         st.info("Aucune matière avec C ou D pour les étudiants sélectionnés.")
     else:
         recap_rows.sort(key=lambda x: -x["total"])
 
-        # Tableau HTML récap
-        recap_headers = "<tr>" + "".join(
-            f'<th style="background:#4f46e5;color:white;padding:8px 14px;font-size:0.82rem;text-align:{a};">{h}</th>'
-            for h, a in [("Matière", "left"), ("C", "center"), ("D", "center"), ("Total", "center")]
-        ) + "</tr>"
-
-        recap_html_rows = ""
-        for i, r in enumerate(recap_rows):
-            bg = "#f8fafc" if i % 2 == 0 else "white"
-            bar_width = int(r["total"] / recap_rows[0]["total"] * 100)
-            bar_c = int(r["nb_c"] / r["total"] * bar_width) if r["total"] else 0
-            bar_d = bar_width - bar_c
-
-            bar = (
-                f'<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;'
-                f'width:{bar_width}%;min-width:4px;margin-top:4px;">'
-                f'<div style="width:{bar_c}px;flex:{bar_c} 0 0;background:#f59e0b;"></div>'
-                f'<div style="width:{bar_d}px;flex:{bar_d} 0 0;background:#ef4444;"></div>'
-                f'</div>'
-            )
-            badge_c = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else '<span style="color:#ccc">—</span>'
-            badge_d = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else '<span style="color:#ccc">—</span>'
-            badge_t = f'<strong style="font-size:0.95rem;">{r["total"]}</strong>'
-
-            recap_html_rows += f"""
-            <tr style="background:{bg}">
-              <td style="padding:8px 14px;font-size:0.85rem;font-weight:600;">
-                {r["Matière"]}{bar}
-              </td>
-              <td style="text-align:center;padding:6px 10px;">{badge_c}</td>
-              <td style="text-align:center;padding:6px 10px;">{badge_d}</td>
-              <td style="text-align:center;padding:6px 10px;">{badge_t}</td>
-            </tr>"""
-
-        st.markdown(f"""
-        <div style="overflow-x:auto;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);max-width:820px;">
-        <table style="width:100%;border-collapse:collapse;font-family:sans-serif;">
-          <thead>{recap_headers}</thead><tbody>{recap_html_rows}</tbody>
-        </table></div>""", unsafe_allow_html=True)
-
-        # Petite ligne de synthèse
-        total_cd  = sum(r["total"] for r in recap_rows)
-        nb_mat    = len(recap_rows)
+        # Ligne de synthèse
+        total_cd = sum(r["total"] for r in recap_rows)
+        nb_mat   = len(recap_rows)
         st.markdown(
-            f"<p style='margin-top:0.7rem;font-size:0.85rem;color:#6b7280;'>"
+            f"<p style='font-size:0.85rem;color:#6b7280;margin-bottom:0.8rem;'>"
             f"<strong>{nb_mat}</strong> matière(s) concernée(s) · "
-            f"<strong>{total_cd}</strong> situation(s) de rattrapage au total "
+            f"<strong>{total_cd}</strong> situation(s) de rattrapage "
             f"(<span style='color:#f59e0b;font-weight:700;'>C : {sum(r['nb_c'] for r in recap_rows)}</span> · "
             f"<span style='color:#ef4444;font-weight:700;'>D : {sum(r['nb_d'] for r in recap_rows)}</span>)"
             f"</p>",
             unsafe_allow_html=True,
         )
+
+        # Carte par matière avec élèves
+        for i, r in enumerate(recap_rows):
+            bg = "#f8fafc" if i % 2 == 0 else "white"
+
+            def eleve_pill(name, mention):
+                color = {
+                    "C": ("#fef3c7", "#78350f", "#fcd34d"),
+                    "D": ("#fee2e2", "#7f1d1d", "#fca5a5"),
+                }[mention]
+                return (
+                    f'<span style="display:inline-block;background:{color[0]};color:{color[1]};'
+                    f'border:1px solid {color[2]};border-radius:20px;padding:1px 10px;'
+                    f'font-size:0.76rem;font-weight:600;margin:2px;">{name}</span>'
+                )
+
+            pills_c = "".join(eleve_pill(e, "C") for e in r["eleves_c"])
+            pills_d = "".join(eleve_pill(e, "D") for e in r["eleves_d"])
+
+            badge_c = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else ""
+            badge_d = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else ""
+
+            bar_width = int(r["total"] / recap_rows[0]["total"] * 100)
+            bar_c = int(r["nb_c"] / r["total"] * bar_width) if r["total"] else 0
+            bar_d = bar_width - bar_c
+            bar = (
+                f'<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;'
+                f'width:{bar_width}%;min-width:4px;margin-top:5px;">'
+                f'<div style="flex:{bar_c} 0 0;background:#f59e0b;"></div>'
+                f'<div style="flex:{bar_d} 0 0;background:#ef4444;"></div>'
+                f'</div>'
+            )
+
+            st.markdown(f"""
+            <div style="background:{bg};border-radius:10px;padding:10px 16px;
+                        margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:200px;">
+                  <span style="font-weight:700;font-size:0.88rem;">{r["Matière"]}</span>
+                  {bar}
+                </div>
+                <div style="display:flex;gap:5px;align-items:center;">
+                  {badge_c}{badge_d}
+                  <span style="font-size:0.78rem;color:#6b7280;margin-left:2px;">/ {r["total"]}</span>
+                </div>
+              </div>
+              <div style="margin-top:7px;line-height:2;">{pills_c}{pills_d}</div>
+            </div>""", unsafe_allow_html=True)
 
 # ─── MAILS ───────────────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -453,10 +473,39 @@ else:
                     # La clé intègre toggle_key → Streamlit recharge value à chaque changement
                     key=f"mail_{toggle_key}_{prenom}_{nom}",
                 )
-                st.download_button(
-                    label="⬇️ Télécharger ce mail (.txt)",
-                    data=edited_mail.encode("utf-8"),
-                    file_name=f"mail_{prenom}_{nom}.txt".replace(" ", "_"),
-                    mime="text/plain",
-                    key=f"dl_{toggle_key}_{prenom}_{nom}",
-                )
+                dl_col, copy_col = st.columns([2, 1])
+                with dl_col:
+                    st.download_button(
+                        label="⬇️ Télécharger (.txt)",
+                        data=edited_mail.encode("utf-8"),
+                        file_name=f"mail_{prenom}_{nom}.txt".replace(" ", "_"),
+                        mime="text/plain",
+                        key=f"dl_{toggle_key}_{prenom}_{nom}",
+                    )
+                with copy_col:
+                    # Bouton copier via JS — encode le texte en base64 pour éviter les problèmes de quotes
+                    import base64
+                    b64 = base64.b64encode(edited_mail.encode("utf-8")).decode()
+                    copy_id = f"copy_{toggle_key}_{prenom}_{nom}".replace(" ", "_").replace("-", "_")
+                    st.markdown(f"""
+                    <button id="{copy_id}"
+                      onclick="
+                        var txt = atob('{b64}');
+                        navigator.clipboard.writeText(txt).then(function() {{
+                          var btn = document.getElementById('{copy_id}');
+                          btn.innerText = '✅ Copié !';
+                          btn.style.background = '#d1fae5';
+                          btn.style.color = '#065f46';
+                          setTimeout(function() {{
+                            btn.innerText = '📋 Copier le mail';
+                            btn.style.background = '#ede9fe';
+                            btn.style.color = '#4f46e5';
+                          }}, 2000);
+                        }});
+                      "
+                      style="width:100%;padding:8px 12px;border:1px solid #c4b5fd;
+                             border-radius:8px;background:#ede9fe;color:#4f46e5;
+                             font-weight:600;font-size:0.85rem;cursor:pointer;
+                             transition:all 0.2s;">
+                      📋 Copier le mail
+                    </button>""", unsafe_allow_html=True)
