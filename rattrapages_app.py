@@ -241,14 +241,24 @@ display_cols      = {c: short_eval_name(c) for c in eval_cols}
 display_df        = working.rename(columns=display_cols)
 eval_display_cols = list(display_cols.values())
 
-# Colonnes "actives" = au moins un résultat non-vide parmi les étudiants.
-# Pour ces colonnes, une cellule vide = absent = convoqué aux rattrapages → marqué "ABS".
-# Si une colonne est entièrement vide, les résultats ne sont pas encore saisis → on ne fait rien.
-active_eval_cols = [c for c in eval_display_cols if display_df[c].notna().any()]
-for col in active_eval_cols:
-    display_df[col] = display_df[col].apply(
-        lambda v: "ABS" if (pd.isna(v) or str(v).strip() == "") else v
-    )
+# ─── OPTION ABSENT ──────────────────────────────────────────────────────────────
+absent_as_rattrapage = st.toggle(
+    "🚨 Cellule vide = absent → convoqué aux rattrapages",
+    value=False,
+    help=(
+        "Si activé : pour toute matière ayant au moins un résultat saisi, "
+        "une cellule vide est considérée comme une absence et entraîne une convocation. "
+        "Les colonnes entièrement vides (résultats non encore saisis) ne sont pas affectées."
+    ),
+)
+
+# Appliquer la logique ABS uniquement si le toggle est activé
+if absent_as_rattrapage:
+    active_eval_cols = [c for c in eval_display_cols if display_df[c].notna().any()]
+    for col in active_eval_cols:
+        display_df[col] = display_df[col].apply(
+            lambda v: "ABS" if (pd.isna(v) or str(v).strip() == "") else v
+        )
 
 nb_excluded = len(excluded_full)
 st.success(
