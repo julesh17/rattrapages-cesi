@@ -45,6 +45,7 @@ st.markdown("""
 .badge-B { background:#dbeafe; color:#1e3a8a; border:1px solid #93c5fd; }
 .badge-C { background:#fef3c7; color:#78350f; border:1px solid #fcd34d; }
 .badge-D { background:#fee2e2; color:#7f1d1d; border:1px solid #fca5a5; }
+.badge-ABS { background:#ffedd5; color:#7c2d12; border:1px solid #fb923c; }
 
 .legend-row {
     display:flex; gap:10px; align-items:center; flex-wrap:wrap;
@@ -53,7 +54,7 @@ st.markdown("""
 .legend-item { display:flex; align-items:center; gap:6px; font-size:0.85rem; font-weight:600; }
 .dot { width:14px; height:14px; border-radius:50%; display:inline-block; }
 .dot-A {background:#10b981;} .dot-B {background:#3b82f6;}
-.dot-C {background:#f59e0b;} .dot-D {background:#ef4444;}
+.dot-C {background:#f59e0b;} .dot-D {background:#ef4444;} .dot-ABS {background:#f97316;}
 
 [data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 
@@ -71,7 +72,7 @@ def badge(val):
     if pd.isna(val) or str(val).strip() == "":
         return ""
     v = str(val).strip()
-    css = f"badge badge-{v}" if v in "ABCD" else "badge"
+    css = f"badge badge-{v}" if v in ("A","B","C","D","ABS") else "badge"
     return f'<span class="{css}">{v}</span>'
 
 
@@ -240,6 +241,15 @@ display_cols      = {c: short_eval_name(c) for c in eval_cols}
 display_df        = working.rename(columns=display_cols)
 eval_display_cols = list(display_cols.values())
 
+# Colonnes "actives" = au moins un résultat non-vide parmi les étudiants.
+# Pour ces colonnes, une cellule vide = absent = convoqué aux rattrapages → marqué "ABS".
+# Si une colonne est entièrement vide, les résultats ne sont pas encore saisis → on ne fait rien.
+active_eval_cols = [c for c in eval_display_cols if display_df[c].notna().any()]
+for col in active_eval_cols:
+    display_df[col] = display_df[col].apply(
+        lambda v: "ABS" if (pd.isna(v) or str(v).strip() == "") else v
+    )
+
 nb_excluded = len(excluded_full)
 st.success(
     f"✅ {len(working)} étudiant(s) chargé(s) — "
@@ -260,6 +270,7 @@ with fcol1:
       <div class="legend-item"><span class="dot dot-B"></span> B – Bien</div>
       <div class="legend-item"><span class="dot dot-C"></span> C – Ajourné léger</div>
       <div class="legend-item"><span class="dot dot-D"></span> D – Ajourné</div>
+      <div class="legend-item"><span class="dot dot-ABS"></span> ABS – Absent</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -283,12 +294,15 @@ with fcol2:
 
 def filter_df(df: pd.DataFrame, grades: list, group: str) -> pd.DataFrame:
     cols = eval_display_cols
+    # ABS is always treated as requiring rattrapage (same as C/D)
+    rattrapage_vals = ["C", "D", "ABS"]
     if grades:
-        df = df[df[cols].isin(grades).any(axis=1)]
+        grades_with_abs = grades + (["ABS"] if any(g in grades for g in ["C", "D"]) else [])
+        df = df[df[cols].isin(grades_with_abs).any(axis=1)]
     if group == "A ou B uniquement (admis / bien)":
-        df = df[df[cols].isin(["A", "B"]).any(axis=1) & ~df[cols].isin(["C", "D"]).any(axis=1)]
+        df = df[df[cols].isin(["A", "B"]).any(axis=1) & ~df[cols].isin(rattrapage_vals).any(axis=1)]
     elif group == "C ou D uniquement (à rattraper)":
-        df = df[df[cols].isin(["C", "D"]).any(axis=1)]
+        df = df[df[cols].isin(rattrapage_vals).any(axis=1)]
     return df
 
 
@@ -358,12 +372,18 @@ if not filtered_df.empty:
             for _, row in filtered_df.iterrows()
             if str(row.get(col, "")).strip() == "D"
         ]
-        total = len(eleves_c) + len(eleves_d)
+        eleves_abs = [
+            f"{row['Prénom']} {row['Nom']}"
+            for _, row in filtered_df.iterrows()
+            if str(row.get(col, "")).strip() == "ABS"
+        ]
+        total = len(eleves_c) + len(eleves_d) + len(eleves_abs)
         if total > 0:
             recap_rows.append({
                 "Matière": col,
                 "eleves_c": eleves_c, "nb_c": len(eleves_c),
                 "eleves_d": eleves_d, "nb_d": len(eleves_d),
+                "eleves_abs": eleves_abs, "nb_abs": len(eleves_abs),
                 "total": total,
             })
 
@@ -380,7 +400,8 @@ if not filtered_df.empty:
             f"<strong>{nb_mat}</strong> matière(s) concernée(s) · "
             f"<strong>{total_cd}</strong> situation(s) de rattrapage "
             f"(<span style='color:#f59e0b;font-weight:700;'>C : {sum(r['nb_c'] for r in recap_rows)}</span> · "
-            f"<span style='color:#ef4444;font-weight:700;'>D : {sum(r['nb_d'] for r in recap_rows)}</span>)"
+            f"<span style='color:#ef4444;font-weight:700;'>D : {sum(r['nb_d'] for r in recap_rows)}</span> · "
+            f"<span style='color:#f97316;font-weight:700;'>ABS : {sum(r.get('nb_abs',0) for r in recap_rows)}</span>)"
             f"</p>",
             unsafe_allow_html=True,
         )
@@ -391,8 +412,9 @@ if not filtered_df.empty:
 
             def eleve_pill(name, mention):
                 color = {
-                    "C": ("#fef3c7", "#78350f", "#fcd34d"),
-                    "D": ("#fee2e2", "#7f1d1d", "#fca5a5"),
+                    "C":   ("#fef3c7", "#78350f", "#fcd34d"),
+                    "D":   ("#fee2e2", "#7f1d1d", "#fca5a5"),
+                    "ABS": ("#ffedd5", "#7c2d12", "#fb923c"),
                 }[mention]
                 return (
                     f'<span style="display:inline-block;background:{color[0]};color:{color[1]};'
@@ -402,18 +424,22 @@ if not filtered_df.empty:
 
             pills_c = "".join(eleve_pill(e, "C") for e in r["eleves_c"])
             pills_d = "".join(eleve_pill(e, "D") for e in r["eleves_d"])
+            pills_abs = "".join(eleve_pill(e, "ABS") for e in r.get("eleves_abs", []))
 
-            badge_c = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else ""
-            badge_d = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else ""
+            badge_c   = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else ""
+            badge_d   = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else ""
+            badge_abs = f'<span class="badge badge-ABS">{r["nb_abs"]}</span>' if r.get("nb_abs") else ""
 
             bar_width = int(r["total"] / recap_rows[0]["total"] * 100)
-            bar_c = int(r["nb_c"] / r["total"] * bar_width) if r["total"] else 0
-            bar_d = bar_width - bar_c
+            bar_c   = int(r["nb_c"]   / r["total"] * bar_width) if r["total"] else 0
+            bar_d   = int(r["nb_d"]   / r["total"] * bar_width) if r["total"] else 0
+            bar_abs = bar_width - bar_c - bar_d
             bar = (
                 f'<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;'
                 f'width:{bar_width}%;min-width:4px;margin-top:5px;">'
                 f'<div style="flex:{bar_c} 0 0;background:#f59e0b;"></div>'
                 f'<div style="flex:{bar_d} 0 0;background:#ef4444;"></div>'
+                f'<div style="flex:{bar_abs} 0 0;background:#f97316;"></div>'
                 f'</div>'
             )
 
@@ -426,11 +452,11 @@ if not filtered_df.empty:
                   {bar}
                 </div>
                 <div style="display:flex;gap:5px;align-items:center;">
-                  {badge_c}{badge_d}
+                  {badge_c}{badge_d}{badge_abs}
                   <span style="font-size:0.78rem;color:#6b7280;margin-left:2px;">/ {r["total"]}</span>
                 </div>
               </div>
-              <div style="margin-top:7px;line-height:2;">{pills_c}{pills_d}</div>
+              <div style="margin-top:7px;line-height:2;">{pills_c}{pills_d}{pills_abs}</div>
             </div>""", unsafe_allow_html=True)
 
 # ─── MAILS ───────────────────────────────────────────────────────────────────────
@@ -446,7 +472,7 @@ else:
 
     students_with_rattrapage = [
         (row["Prénom"], row["Nom"],
-         [c for c in eval_display_cols if str(row.get(c, "")).strip() in ("C", "D")])
+         [c for c in eval_display_cols if str(row.get(c, "")).strip() in ("C", "D", "ABS")])
         for _, row in filtered_df.iterrows()
     ]
     students_with_rattrapage = [(p, n, m) for p, n, m in students_with_rattrapage if m]
@@ -524,7 +550,7 @@ else:
              ""]
 
     for r in recap_rows:
-        all_students = r["eleves_c"] + r["eleves_d"]
+        all_students = r["eleves_c"] + r["eleves_d"] + r.get("eleves_abs", [])
         noms_liste   = ", ".join(all_students)
         lines.append(f"• {r['Matière']} : {noms_liste}")
 
