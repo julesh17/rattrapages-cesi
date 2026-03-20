@@ -680,48 +680,48 @@ if not filtered_df.empty and recap_rows:
         for i, groupe in enumerate(groupes):
             bg, fg, border = slot_colors[i % len(slot_colors)]
 
-            # Élèves totaux du créneau (union)
             all_eleves_creneau = set()
             for m in groupe:
                 all_eleves_creneau |= mat_students[m]
 
-            # Lignes matière + élèves
-            lignes_html = ""
+            # Construire le HTML sans f-string multi-ligne imbriqué (évite le rendu texte brut)
+            lignes_parts = []
             for m in groupe:
                 eleves_m = sorted(mat_students[m])
                 pills = "".join(
-                    f'<span style="display:inline-block;background:white;color:{fg};'
-                    f'border:1px solid {border};border-radius:20px;padding:1px 9px;'
-                    f'font-size:0.74rem;font-weight:600;margin:2px;">{e}</span>'
+                    '<span style="display:inline-block;background:white;color:' + fg
+                    + ';border:1px solid ' + border
+                    + ';border-radius:20px;padding:1px 9px;font-size:0.74rem;font-weight:600;margin:2px;">'
+                    + e + '</span>'
                     for e in eleves_m
                 )
-                lignes_html += f"""
-                <div style="margin-bottom:8px;">
-                  <span style="font-weight:700;font-size:0.85rem;">{m}</span>
-                  <span style="font-size:0.78rem;color:{fg};opacity:0.8;margin-left:6px;">
-                    ({len(eleves_m)} élève(s))
-                  </span>
-                  <div style="margin-top:4px;">{pills}</div>
-                </div>"""
+                lignes_parts.append(
+                    '<div style="margin-bottom:8px;">'
+                    + '<span style="font-weight:700;font-size:0.85rem;">' + m + '</span>'
+                    + '<span style="font-size:0.78rem;color:' + fg + ';opacity:0.8;margin-left:6px;">'
+                    + '(' + str(len(eleves_m)) + ' élève(s))</span>'
+                    + '<div style="margin-top:4px;">' + pills + '</div>'
+                    + '</div>'
+                )
+            lignes_html = "".join(lignes_parts)
 
-            nb_mat_creneau   = len(groupe)
-            nb_elev_creneau  = len(all_eleves_creneau)
+            nb_mat_creneau  = len(groupe)
+            nb_elev_creneau = len(all_eleves_creneau)
 
-            st.markdown(f"""
-            <div style="background:{bg};border:1.5px solid {border};border-radius:12px;
-                        padding:14px 18px;margin-bottom:10px;
-                        box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-                <span style="background:{fg};color:white;border-radius:8px;
-                             padding:3px 12px;font-weight:800;font-size:0.9rem;">
-                  Créneau {i+1}
-                </span>
-                <span style="font-size:0.82rem;color:{fg};font-weight:600;">
-                  {nb_mat_creneau} matière(s) · {nb_elev_creneau} élève(s) au total
-                </span>
-              </div>
-              {lignes_html}
-            </div>""", unsafe_allow_html=True)
+            card = (
+                '<div style="background:' + bg + ';border:1.5px solid ' + border
+                + ';border-radius:12px;padding:14px 18px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);">'
+                + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">'
+                + '<span style="background:' + fg + ';color:white;border-radius:8px;padding:3px 12px;font-weight:800;font-size:0.9rem;">'
+                + 'Créneau ' + str(i + 1) + '</span>'
+                + '<span style="font-size:0.82rem;color:' + fg + ';font-weight:600;">'
+                + str(nb_mat_creneau) + ' matière(s) · ' + str(nb_elev_creneau) + ' élève(s) au total'
+                + '</span></div>'
+                + lignes_html
+                + '</div>'
+            )
+            st.markdown(card, unsafe_allow_html=True)
+
 
         # Matrice de compatibilité
         with st.expander("🔍 Voir la matrice de compatibilité complète"):
