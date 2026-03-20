@@ -617,3 +617,146 @@ else:
                  transition:all 0.2s;">
           📋 Copier le mail
         </button>""", unsafe_allow_html=True)
+
+# ─── COMPATIBILITÉ CRÉNEAUX ─────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-title">🗓️ Rattrapages pouvant être organisés en parallèle</div>', unsafe_allow_html=True)
+st.markdown(
+    "<p style='font-size:0.85rem;color:#6b7280;margin-bottom:1rem;'>"
+    "Deux matières sont <strong>compatibles</strong> (peuvent avoir lieu en même temps) "
+    "si elles n'ont <strong>aucun élève en commun</strong> parmi les convoqués (C, D ou ABS)."
+    "</p>", unsafe_allow_html=True
+)
+
+if not filtered_df.empty and recap_rows:
+    import itertools
+
+    # Construire le dictionnaire matière → ensemble d'élèves convoqués
+    rattrapage_vals = {"C", "D", "ABS"}
+    mat_students = {}
+    for r in recap_rows:
+        eleves = set(r["eleves_c"] + r["eleves_d"] + r.get("eleves_abs", []))
+        if eleves:
+            mat_students[r["Matière"]] = eleves
+
+    matieres_list = list(mat_students.keys())
+
+    if len(matieres_list) < 2:
+        st.info("Pas assez de matières avec rattrapages pour calculer des compatibilités.")
+    else:
+        # Construire les groupes compatibles par coloration gloutonne (graph coloring greedy)
+        # Deux matières incompatibles = elles partagent au moins un élève
+        def sont_compatibles(m1, m2):
+            return mat_students[m1].isdisjoint(mat_students[m2])
+
+        # Groupes : liste de listes de matières pouvant toutes se tenir en même temps
+        groupes = []
+        reste = list(matieres_list)
+        while reste:
+            groupe = [reste[0]]
+            for m in reste[1:]:
+                if all(sont_compatibles(m, g) for g in groupe):
+                    groupe.append(m)
+            groupes.append(groupe)
+            reste = [m for m in reste if m not in groupe]
+
+        # Couleurs de créneaux
+        slot_colors = [
+            ("#ede9fe", "#4f46e5", "#c4b5fd"),  # violet
+            ("#d1fae5", "#065f46", "#6ee7b7"),  # vert
+            ("#dbeafe", "#1e3a8a", "#93c5fd"),  # bleu
+            ("#fef3c7", "#78350f", "#fcd34d"),  # jaune
+            ("#fee2e2", "#7f1d1d", "#fca5a5"),  # rouge
+            ("#f3e8ff", "#581c87", "#d8b4fe"),  # mauve
+            ("#ffedd5", "#7c2d12", "#fb923c"),  # orange
+        ]
+
+        st.markdown(
+            f"<p style='font-size:0.9rem;'><strong>{len(groupes)} créneau(x) minimum</strong> "
+            f"nécessaire(s) pour organiser tous les rattrapages sans conflit.</p>",
+            unsafe_allow_html=True
+        )
+
+        for i, groupe in enumerate(groupes):
+            bg, fg, border = slot_colors[i % len(slot_colors)]
+
+            # Élèves totaux du créneau (union)
+            all_eleves_creneau = set()
+            for m in groupe:
+                all_eleves_creneau |= mat_students[m]
+
+            # Lignes matière + élèves
+            lignes_html = ""
+            for m in groupe:
+                eleves_m = sorted(mat_students[m])
+                pills = "".join(
+                    f'<span style="display:inline-block;background:white;color:{fg};'
+                    f'border:1px solid {border};border-radius:20px;padding:1px 9px;'
+                    f'font-size:0.74rem;font-weight:600;margin:2px;">{e}</span>'
+                    for e in eleves_m
+                )
+                lignes_html += f"""
+                <div style="margin-bottom:8px;">
+                  <span style="font-weight:700;font-size:0.85rem;">{m}</span>
+                  <span style="font-size:0.78rem;color:{fg};opacity:0.8;margin-left:6px;">
+                    ({len(eleves_m)} élève(s))
+                  </span>
+                  <div style="margin-top:4px;">{pills}</div>
+                </div>"""
+
+            nb_mat_creneau   = len(groupe)
+            nb_elev_creneau  = len(all_eleves_creneau)
+
+            st.markdown(f"""
+            <div style="background:{bg};border:1.5px solid {border};border-radius:12px;
+                        padding:14px 18px;margin-bottom:10px;
+                        box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+                <span style="background:{fg};color:white;border-radius:8px;
+                             padding:3px 12px;font-weight:800;font-size:0.9rem;">
+                  Créneau {i+1}
+                </span>
+                <span style="font-size:0.82rem;color:{fg};font-weight:600;">
+                  {nb_mat_creneau} matière(s) · {nb_elev_creneau} élève(s) au total
+                </span>
+              </div>
+              {lignes_html}
+            </div>""", unsafe_allow_html=True)
+
+        # Matrice de compatibilité
+        with st.expander("🔍 Voir la matrice de compatibilité complète"):
+            n = len(matieres_list)
+            # En-tête
+            th = "".join(
+                f'<th style="background:#4f46e5;color:white;padding:5px 8px;'
+                f'font-size:0.7rem;text-align:center;white-space:nowrap;'
+                f'writing-mode:vertical-rl;transform:rotate(180deg);max-width:28px;">'
+                f'{m[:25]}</th>'
+                for m in matieres_list
+            )
+            header_row = f'<tr><th style="background:#4f46e5;"></th>{th}</tr>'
+
+            rows_html = ""
+            for i_m, m1 in enumerate(matieres_list):
+                cells = f'<td style="font-weight:700;font-size:0.75rem;padding:4px 8px;white-space:nowrap;background:#f8fafc;">{m1[:30]}</td>'
+                for j_m, m2 in enumerate(matieres_list):
+                    if i_m == j_m:
+                        cells += '<td style="background:#e2e8f0;text-align:center;">—</td>'
+                    elif sont_compatibles(m1, m2):
+                        cells += '<td style="background:#d1fae5;color:#065f46;text-align:center;font-weight:700;font-size:0.8rem;">✓</td>'
+                    else:
+                        nb_communs = len(mat_students[m1] & mat_students[m2])
+                        cells += f'<td style="background:#fee2e2;color:#7f1d1d;text-align:center;font-size:0.75rem;font-weight:600;">{nb_communs}</td>'
+                bg_row = "#f8fafc" if i_m % 2 == 0 else "white"
+                rows_html += f'<tr style="background:{bg_row}">{cells}</tr>'
+
+            st.markdown(f"""
+            <p style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">
+              ✓ = compatible (0 élève en commun) · chiffre = nb d'élèves en conflit
+            </p>
+            <div style="overflow-x:auto;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,0.08);">
+            <table style="border-collapse:collapse;font-family:sans-serif;">
+              <thead>{header_row}</thead><tbody>{rows_html}</tbody>
+            </table></div>""", unsafe_allow_html=True)
+else:
+    st.info("Aucune donnée disponible — importez un fichier et appliquez les filtres.")
