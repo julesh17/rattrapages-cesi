@@ -1,11 +1,13 @@
 """
-Application Streamlit - Gestion des rattrapages étudiants
-Lancer avec : streamlit run rattrapages_app.py
+Application Streamlit - Gestion des rattrapages étudiants (v2 avec compensations UE)
+Lancer avec : streamlit run rattrapages_app_v2.py
 Dépendances : pip install streamlit pandas openpyxl
 """
 
 import io
 import re
+import base64
+import itertools
 import streamlit as st
 import pandas as pd
 
@@ -46,6 +48,9 @@ st.markdown("""
 .badge-C { background:#fef3c7; color:#78350f; border:1px solid #fcd34d; }
 .badge-D { background:#fee2e2; color:#7f1d1d; border:1px solid #fca5a5; }
 .badge-ABS { background:#ffedd5; color:#7c2d12; border:1px solid #fb923c; }
+.badge-VAL { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; font-size:0.72rem; }
+.badge-NVAL { background:#fee2e2; color:#7f1d1d; border:1px solid #fca5a5; font-size:0.72rem; }
+.badge-COMP { background:#e0e7ff; color:#3730a3; border:1px solid #a5b4fc; font-size:0.72rem; }
 
 .legend-row {
     display:flex; gap:10px; align-items:center; flex-wrap:wrap;
@@ -63,8 +68,18 @@ st.markdown("""
     color: #4f46e5; margin-bottom: 0.4rem;
     display: flex; align-items: center; gap: 8px;
 }
+
+.ue-card {
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
 </style>
 """, unsafe_allow_html=True)
+
+# ─── CONSTANTES MENTIONS ─────────────────────────────────────────────────────────
+GRADE_VALUES = {"A": 5, "B": 4, "C": 2, "D": 1}
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -77,7 +92,6 @@ def badge(val):
 
 
 def split_name(personne: str):
-    """'NOM, Prénom' -> (prénom, nom)"""
     if "," in personne:
         parts  = personne.split(",", 1)
         nom    = parts[0].strip().title()
@@ -148,29 +162,188 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.read()
 
 
-# ─── CHARGEMENT DU FICHIER ───────────────────────────────────────────────────────
+# ─── LOGIQUE DE COMPENSATION UE ─────────────────────────────────────────────────
+
+def load_ue_structure(rn_file, semestre: int) -> dict:
+    """
+    Charge la structure UE → éléments évaluables + coefficients pour un semestre donné.
+    Retourne un dict: {nom_ue: [{element, coeff}, ...]}
+    """
+    df = pd.read_excel(rn_file)
+    df_sem = df[df["Semestre Unite Enseignement"] == semestre].dropna(subset=["Libelle Element Evaluable"])
+    df_sem = df_sem[df_sem["Coefficient Element Evaluable"].notna()]
+    df_sem = df_sem[df_sem["Coefficient Element Evaluable"] > 0]
+
+    ue_structure = {}
+    for _, row in df_sem.iterrows():
+        ue = row["Libelle Unite Enseignement"]
+        elem = row["Libelle Element Evaluable"]
+        coeff = float(row["Coefficient Element Evaluable"])
+        if ue not in ue_structure:
+            ue_structure[ue] = []
+        ue_structure[ue].append({"element": elem, "coeff": coeff})
+    return ue_structure
+
+
+def compute_ue_result(grades_row: dict, ue_elements: list) -> dict:
+    """
+    Calcule le résultat d'une UE pour un étudiant.
+    grades_row: dict {element_name: mention (A/B/C/D/ABS/NaN)}
+    ue_elements: list of {element, coeff}
+    
+    Retourne: {
+        'mention': A/B/C/D ou None si données manquantes,
+        'weighted_avg': float,
+        'elements': [{element, coeff, mention, value}],
+        'validated': bool,
+        'compensation': bool,  # True si validée par compensation
+        'missing': bool        # True si données manquantes
+    }
+    """
+    elements_data = []
+    total_coeff = 0
+    weighted_sum = 0
+    missing = False
+
+    for elem_info in ue_elements:
+        elem_name = elem_info["element"]
+        coeff = elem_info["coeff"]
+        
+        # Trouver la mention correspondante (matching partiel du nom)
+        mention = None
+        for key, val in grades_row.items():
+            if elem_name.lower().strip() in key.lower().strip() or key.lower().strip() in elem_name.lower().strip():
+                if pd.notna(val) and str(val).strip() != "":
+                    mention = str(val).strip()
+                break
+        
+        # Si pas trouvé, chercher par mots clés
+        if mention is None:
+            for key, val in grades_row.items():
+                key_words = set(re.split(r'[\s\-:,]+', elem_name.lower()))
+                col_words = set(re.split(r'[\s\-:,]+', key.lower()))
+                overlap = key_words & col_words - {'', 'de', 'la', 'le', 'les', 'du', 'et', 'en', 'un', 'une'}
+                if len(overlap) >= 3:
+                    if pd.notna(val) and str(val).strip() != "":
+                        mention = str(val).strip()
+                    break
+
+        if mention is None or mention == "ABS":
+            # Absent ou manquant
+            elements_data.append({
+                "element": elem_name, "coeff": coeff,
+                "mention": mention or "—", "value": None
+            })
+            missing = True
+        elif mention in GRADE_VALUES:
+            val = GRADE_VALUES[mention]
+            weighted_sum += val * coeff
+            total_coeff += coeff
+            elements_data.append({
+                "element": elem_name, "coeff": coeff,
+                "mention": mention, "value": val
+            })
+        else:
+            elements_data.append({
+                "element": elem_name, "coeff": coeff,
+                "mention": mention, "value": None
+            })
+            missing = True
+
+    if total_coeff == 0:
+        return {
+            "mention": None, "weighted_avg": None,
+            "elements": elements_data, "validated": False,
+            "compensation": False, "missing": True
+        }
+
+    weighted_avg = weighted_sum / total_coeff
+
+    # Règles de validation avec compensation
+    # A si moy > 4.6, B si > 3.6, C si > 1.6 (non validé), D si <= 1.6 (non validé)
+    if weighted_avg > 4.6:
+        mention_ue = "A"
+        validated = True
+        compensation = False
+    elif weighted_avg > 3.6:
+        mention_ue = "B"
+        validated = True
+        compensation = False
+    elif weighted_avg > 1.6:
+        mention_ue = "C"
+        validated = False
+        compensation = False
+    else:
+        mention_ue = "D"
+        validated = False
+        compensation = False
+
+    # Compensation : si une matière individuelle est C mais la moy UE > 3.6 → validée B
+    # (Déjà géré par la logique ci-dessus)
+    # On marque "compensation" si l'UE est validée alors qu'il y a au moins un C ou D individuel
+    has_cd = any(
+        e["mention"] in ("C", "D")
+        for e in elements_data if e["value"] is not None
+    )
+    if validated and has_cd:
+        compensation = True
+
+    return {
+        "mention": mention_ue,
+        "weighted_avg": round(weighted_avg, 3),
+        "elements": elements_data,
+        "validated": validated,
+        "compensation": compensation,
+        "missing": missing
+    }
+
+
+def build_grade_lookup(row: pd.Series, eval_cols: list) -> dict:
+    """Construit un dict {nom_court_element: mention} pour une ligne étudiant."""
+    result = {}
+    for col in eval_cols:
+        short = short_eval_name(col)
+        val = row.get(col, None)
+        result[short] = val if pd.notna(val) else None
+    return result
+
+
+# ─── INTERFACE ──────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <div class="hero">
   <h1>🎓 Gestion des rattrapages</h1>
-  <p>Importez votre fichier de notes, filtrez par mention et générez les mails de convocation.</p>
+  <p>Importez votre fichier de notes et le référentiel, filtrez par mention et calculez les compensations UE.</p>
 </div>
 """, unsafe_allow_html=True)
 
-uploaded = st.file_uploader(
-    "📂 Importer un fichier Excel (.xlsx)",
-    type=["xlsx"],
-    help="Le fichier doit contenir une colonne 'Personne' et des colonnes commençant par 'Eval'.",
-)
+# ─── CHARGEMENT FICHIERS ─────────────────────────────────────────────────────────
+col_up1, col_up2 = st.columns(2)
 
-if uploaded is None:
-    st.info("⬆️ Veuillez importer un fichier Excel pour commencer.")
+with col_up1:
+    uploaded_notes = st.file_uploader(
+        "📂 Fichier de notes (.xlsx)",
+        type=["xlsx"],
+        help="Fichier contenant 'Personne' et des colonnes 'Eval - ...'",
+        key="notes_file"
+    )
+
+with col_up2:
+    uploaded_rn = st.file_uploader(
+        "📋 Référentiel cahier des charges (.xlsx)",
+        type=["xlsx"],
+        help="Fichier RN avec la structure UE/éléments évaluables et coefficients",
+        key="rn_file"
+    )
+
+if uploaded_notes is None:
+    st.info("⬆️ Veuillez importer le fichier de notes pour commencer.")
     st.stop()
 
 try:
-    raw_df = pd.read_excel(uploaded)
+    raw_df = pd.read_excel(uploaded_notes)
 except Exception as e:
-    st.error(f"Impossible de lire le fichier : {e}")
+    st.error(f"Impossible de lire le fichier de notes : {e}")
     st.stop()
 
 if "Personne" not in raw_df.columns:
@@ -181,6 +354,17 @@ all_eval_cols = [c for c in raw_df.columns if str(c).startswith("Eval")]
 if not all_eval_cols:
     st.error("Aucune colonne commençant par 'Eval' trouvée dans le fichier.")
     st.stop()
+
+# ─── SÉLECTION SEMESTRE ──────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-title">📅 Semestre</div>', unsafe_allow_html=True)
+
+semestre = st.selectbox(
+    "Semestre concerné :",
+    options=[5, 6, 7, 8],
+    index=2,
+    help="Sélectionnez le semestre pour charger la bonne structure UE depuis le référentiel."
+)
 
 # ─── OPTIONS DE COLONNES ─────────────────────────────────────────────────────────
 st.markdown("---")
@@ -205,7 +389,6 @@ with opt_col2:
     short_to_full = {v: k for k, v in short_names.items()}
     all_short     = list(short_names.values())
 
-    # Pré-exclure Global exam si le toggle est activé
     default_excluded = (
         [short_names[c] for c in all_eval_cols if GLOBAL_EXAM_KW.lower() in c.lower()]
         if exclude_global else []
@@ -218,7 +401,6 @@ with opt_col2:
         help="Ces matières n'apparaissent ni dans le tableau ni dans les mails.",
     )
 
-# Fusion des deux exclusions
 excluded_full = {short_to_full[s] for s in excluded_short}
 if exclude_global:
     excluded_full |= {c for c in all_eval_cols if GLOBAL_EXAM_KW.lower() in c.lower()}
@@ -252,7 +434,6 @@ absent_as_rattrapage = st.toggle(
     ),
 )
 
-# Appliquer la logique ABS uniquement si le toggle est activé
 if absent_as_rattrapage:
     active_eval_cols = [c for c in eval_display_cols if display_df[c].notna().any()]
     for col in active_eval_cols:
@@ -266,6 +447,49 @@ st.success(
     f"{len(eval_cols)} matière(s) active(s)"
     + (f" ({nb_excluded} exclue(s))" if nb_excluded else "") + "."
 )
+
+# ─── COMPENSATIONS UE ────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-title">⚖️ Compensations au sein des UE</div>', unsafe_allow_html=True)
+
+use_compensation = st.toggle(
+    "✨ Activer le calcul des compensations UE",
+    value=True if uploaded_rn is not None else False,
+    help=(
+        "Calcule la moyenne pondérée par UE et applique les règles de compensation. "
+        "Nécessite le fichier référentiel (cahier des charges)."
+    ),
+)
+
+ue_structure = {}
+if use_compensation:
+    if uploaded_rn is None:
+        st.warning("⚠️ Importez le fichier référentiel (cahier des charges) pour activer les compensations.")
+        use_compensation = False
+    else:
+        try:
+            ue_structure = load_ue_structure(uploaded_rn, semestre)
+            st.success(f"📚 {len(ue_structure)} UE chargée(s) pour le semestre {semestre}.")
+        except Exception as e:
+            st.error(f"Erreur lors du chargement du référentiel : {e}")
+            use_compensation = False
+
+# ─── CALCUL COMPENSATIONS PAR ÉTUDIANT ──────────────────────────────────────────
+student_ue_results = {}  # {student_name: {ue_name: result_dict}}
+
+if use_compensation and ue_structure:
+    for _, row in display_df.iterrows():
+        student_key = f"{row['Prénom']} {row['Nom']}"
+        grades_lookup = {}
+        for col in eval_display_cols:
+            val = row.get(col, None)
+            grades_lookup[col] = val if (pd.notna(val) if val is not None else False) else None
+
+        ue_results = {}
+        for ue_name, ue_elems in ue_structure.items():
+            result = compute_ue_result(grades_lookup, ue_elems)
+            ue_results[ue_name] = result
+        student_ue_results[student_key] = ue_results
 
 # ─── FILTRES MENTIONS ────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -304,7 +528,6 @@ with fcol2:
 
 def filter_df(df: pd.DataFrame, grades: list, group: str) -> pd.DataFrame:
     cols = eval_display_cols
-    # ABS is always treated as requiring rattrapage (same as C/D)
     rattrapage_vals = ["C", "D", "ABS"]
     if grades:
         grades_with_abs = grades + (["ABS"] if any(g in grades for g in ["C", "D"]) else [])
@@ -353,6 +576,91 @@ if not filtered_df.empty:
 else:
     st.warning("Aucun étudiant ne correspond aux filtres sélectionnés.")
 
+# ─── SECTION COMPENSATIONS UE ─────────────────────────────────────────────────────
+if use_compensation and ue_structure and not filtered_df.empty:
+    st.markdown("---")
+    st.markdown('<div class="section-title">⚖️ Résultats par UE avec compensations</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <p style="font-size:0.85rem;color:#6b7280;margin-bottom:1rem;">
+    Règles de compensation : <strong>A si moy > 4,6</strong> · <strong>B si moy > 3,6</strong> · 
+    <strong>C (non validée) si moy > 1,6</strong> · <strong>D (non validée) si moy ≤ 1,6</strong><br>
+    <em>Valeurs des mentions : A=5, B=4, C=2, D=1</em>
+    </p>
+    """, unsafe_allow_html=True)
+
+    for _, row in filtered_df.iterrows():
+        student_key = f"{row['Prénom']} {row['Nom']}"
+        ue_results = student_ue_results.get(student_key, {})
+        if not ue_results:
+            continue
+
+        # Vérifier si l'étudiant a des UE non validées
+        non_validated = {ue: r for ue, r in ue_results.items() if not r["validated"] and not r["missing"]}
+        compensated   = {ue: r for ue, r in ue_results.items() if r["validated"] and r["compensation"]}
+
+        with st.expander(
+            f"{'🔴' if non_validated else '🟢'} {student_key} — "
+            f"{len(non_validated)} UE non validée(s) · {len(compensated)} compensation(s)"
+        ):
+            for ue_name, result in ue_results.items():
+                if result["missing"] and result["weighted_avg"] is None:
+                    continue
+
+                # Couleur de la carte
+                if result["missing"]:
+                    bg, border = "#f8fafc", "#e5e7eb"
+                elif result["validated"] and result["compensation"]:
+                    bg, border = "#e0e7ff", "#a5b4fc"  # violet = compensé
+                elif result["validated"]:
+                    bg, border = "#d1fae5", "#6ee7b7"  # vert = validé
+                else:
+                    bg, border = "#fee2e2", "#fca5a5"  # rouge = non validé
+
+                mention_badge = ""
+                if result["mention"]:
+                    css = f"badge badge-{result['mention']}"
+                    mention_badge = f'<span class="{css}">{result["mention"]}</span>'
+
+                status_badge = ""
+                if result["missing"]:
+                    status_badge = '<span class="badge" style="background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db;">Données manquantes</span>'
+                elif result["validated"] and result["compensation"]:
+                    status_badge = '<span class="badge badge-COMP">✓ Validée par compensation</span>'
+                elif result["validated"]:
+                    status_badge = '<span class="badge badge-VAL">✓ Validée</span>'
+                else:
+                    status_badge = '<span class="badge badge-NVAL">✗ Non validée</span>'
+
+                avg_str = f"{result['weighted_avg']:.2f}" if result['weighted_avg'] is not None else "—"
+
+                # Détail des éléments
+                elems_html = ""
+                for e in result["elements"]:
+                    e_mention = e["mention"]
+                    e_badge = f'<span class="badge badge-{e_mention}">{e_mention}</span>' if e_mention in ("A","B","C","D","ABS") else f'<span style="color:#9ca3af;font-size:0.8rem;">{e_mention}</span>'
+                    elems_html += (
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'align-items:center;padding:3px 0;border-bottom:1px solid #f3f4f6;">'
+                        f'<span style="font-size:0.78rem;color:#374151;flex:1;">{e["element"]}</span>'
+                        f'<span style="font-size:0.75rem;color:#6b7280;margin:0 8px;">coeff {int(e["coeff"])}</span>'
+                        f'{e_badge}</div>'
+                    )
+
+                st.markdown(f"""
+                <div style="background:{bg};border:1.5px solid {border};border-radius:10px;
+                            padding:12px 16px;margin-bottom:8px;">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+                    <span style="font-weight:700;font-size:0.88rem;flex:1;">{ue_name}</span>
+                    {mention_badge}
+                    <span style="font-size:0.82rem;color:#6b7280;">moy. {avg_str}</span>
+                    {status_badge}
+                  </div>
+                  <div style="border-top:1px solid {border};padding-top:8px;">
+                    {elems_html}
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
 # ─── EXPORT EXCEL ────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown('<div class="section-title">📥 Export Excel</div>', unsafe_allow_html=True)
@@ -369,8 +677,8 @@ if not filtered_df.empty:
 st.markdown("---")
 st.markdown('<div class="section-title">📊 Récapitulatif des matières en rattrapage</div>', unsafe_allow_html=True)
 
+recap_rows = []
 if not filtered_df.empty:
-    recap_rows = []
     for col in eval_display_cols:
         eleves_c = [
             f"{row['Prénom']} {row['Nom']}"
@@ -387,87 +695,120 @@ if not filtered_df.empty:
             for _, row in filtered_df.iterrows()
             if str(row.get(col, "")).strip() == "ABS"
         ]
+        # Filtrer ceux compensés si actif
+        if use_compensation and student_ue_results:
+            def is_compensated(student_name, element_name):
+                ue_res = student_ue_results.get(student_name, {})
+                for ue_name, result in ue_res.items():
+                    if result["validated"] and result["compensation"]:
+                        for e in result["elements"]:
+                            if element_name.lower() in e["element"].lower() or e["element"].lower() in element_name.lower():
+                                return True
+                return False
+            eleves_c_comp   = [e for e in eleves_c   if is_compensated(e, col)]
+            eleves_d_comp   = [e for e in eleves_d   if is_compensated(e, col)]
+            eleves_c_nocomp = [e for e in eleves_c   if not is_compensated(e, col)]
+            eleves_d_nocomp = [e for e in eleves_d   if not is_compensated(e, col)]
+        else:
+            eleves_c_comp = eleves_d_comp = []
+            eleves_c_nocomp = eleves_c
+            eleves_d_nocomp = eleves_d
+
         total = len(eleves_c) + len(eleves_d) + len(eleves_abs)
         if total > 0:
             recap_rows.append({
                 "Matière": col,
-                "eleves_c": eleves_c, "nb_c": len(eleves_c),
-                "eleves_d": eleves_d, "nb_d": len(eleves_d),
+                "eleves_c": eleves_c_nocomp, "nb_c": len(eleves_c_nocomp),
+                "eleves_d": eleves_d_nocomp, "nb_d": len(eleves_d_nocomp),
                 "eleves_abs": eleves_abs, "nb_abs": len(eleves_abs),
+                "eleves_c_comp": eleves_c_comp, "eleves_d_comp": eleves_d_comp,
                 "total": total,
+                "total_rattrapage": len(eleves_c_nocomp) + len(eleves_d_nocomp) + len(eleves_abs),
             })
 
-    if not recap_rows:
-        st.info("Aucune matière avec C ou D pour les étudiants sélectionnés.")
-    else:
-        recap_rows.sort(key=lambda x: -x["total"])
+if not recap_rows:
+    st.info("Aucune matière avec C ou D pour les étudiants sélectionnés.")
+else:
+    recap_rows.sort(key=lambda x: -x["total_rattrapage"])
 
-        # Ligne de synthèse
-        total_cd = sum(r["total"] for r in recap_rows)
-        nb_mat   = len(recap_rows)
-        st.markdown(
-            f"<p style='font-size:0.85rem;color:#6b7280;margin-bottom:0.8rem;'>"
-            f"<strong>{nb_mat}</strong> matière(s) concernée(s) · "
-            f"<strong>{total_cd}</strong> situation(s) de rattrapage "
-            f"(<span style='color:#f59e0b;font-weight:700;'>C : {sum(r['nb_c'] for r in recap_rows)}</span> · "
-            f"<span style='color:#ef4444;font-weight:700;'>D : {sum(r['nb_d'] for r in recap_rows)}</span> · "
-            f"<span style='color:#f97316;font-weight:700;'>ABS : {sum(r.get('nb_abs',0) for r in recap_rows)}</span>)"
-            f"</p>",
-            unsafe_allow_html=True,
-        )
+    total_cd = sum(r["total_rattrapage"] for r in recap_rows)
+    nb_mat   = len([r for r in recap_rows if r["total_rattrapage"] > 0])
+    nb_comp_total = sum(len(r["eleves_c_comp"]) + len(r["eleves_d_comp"]) for r in recap_rows)
 
-        # Carte par matière avec élèves
-        for i, r in enumerate(recap_rows):
-            bg = "#f8fafc" if i % 2 == 0 else "white"
+    st.markdown(
+        f"<p style='font-size:0.85rem;color:#6b7280;margin-bottom:0.8rem;'>"
+        f"<strong>{nb_mat}</strong> matière(s) concernée(s) · "
+        f"<strong>{total_cd}</strong> situation(s) de rattrapage "
+        f"(<span style='color:#f59e0b;font-weight:700;'>C : {sum(r['nb_c'] for r in recap_rows)}</span> · "
+        f"<span style='color:#ef4444;font-weight:700;'>D : {sum(r['nb_d'] for r in recap_rows)}</span> · "
+        f"<span style='color:#f97316;font-weight:700;'>ABS : {sum(r.get('nb_abs',0) for r in recap_rows)}</span>)"
+        + (f" · <span style='color:#6366f1;font-weight:700;'>⚖️ {nb_comp_total} compensé(s)</span>" if nb_comp_total > 0 else "")
+        + "</p>",
+        unsafe_allow_html=True,
+    )
 
-            def eleve_pill(name, mention):
+    for i, r in enumerate(recap_rows):
+        bg = "#f8fafc" if i % 2 == 0 else "white"
+
+        def eleve_pill(name, mention, compensated=False):
+            if compensated:
+                color = ("#e0e7ff", "#3730a3", "#a5b4fc")
+                label = f"{name} ⚖️"
+            else:
                 color = {
                     "C":   ("#fef3c7", "#78350f", "#fcd34d"),
                     "D":   ("#fee2e2", "#7f1d1d", "#fca5a5"),
                     "ABS": ("#ffedd5", "#7c2d12", "#fb923c"),
                 }[mention]
-                return (
-                    f'<span style="display:inline-block;background:{color[0]};color:{color[1]};'
-                    f'border:1px solid {color[2]};border-radius:20px;padding:1px 10px;'
-                    f'font-size:0.76rem;font-weight:600;margin:2px;">{name}</span>'
-                )
-
-            pills_c = "".join(eleve_pill(e, "C") for e in r["eleves_c"])
-            pills_d = "".join(eleve_pill(e, "D") for e in r["eleves_d"])
-            pills_abs = "".join(eleve_pill(e, "ABS") for e in r.get("eleves_abs", []))
-
-            badge_c   = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else ""
-            badge_d   = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else ""
-            badge_abs = f'<span class="badge badge-ABS">{r["nb_abs"]}</span>' if r.get("nb_abs") else ""
-
-            bar_width = int(r["total"] / recap_rows[0]["total"] * 100)
-            bar_c   = int(r["nb_c"]   / r["total"] * bar_width) if r["total"] else 0
-            bar_d   = int(r["nb_d"]   / r["total"] * bar_width) if r["total"] else 0
-            bar_abs = bar_width - bar_c - bar_d
-            bar = (
-                f'<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;'
-                f'width:{bar_width}%;min-width:4px;margin-top:5px;">'
-                f'<div style="flex:{bar_c} 0 0;background:#f59e0b;"></div>'
-                f'<div style="flex:{bar_d} 0 0;background:#ef4444;"></div>'
-                f'<div style="flex:{bar_abs} 0 0;background:#f97316;"></div>'
-                f'</div>'
+                label = name
+            return (
+                f'<span style="display:inline-block;background:{color[0]};color:{color[1]};'
+                f'border:1px solid {color[2]};border-radius:20px;padding:1px 10px;'
+                f'font-size:0.76rem;font-weight:600;margin:2px;">{label}</span>'
             )
 
-            st.markdown(f"""
-            <div style="background:{bg};border-radius:10px;padding:10px 16px;
-                        margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
-              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                <div style="flex:1;min-width:200px;">
-                  <span style="font-weight:700;font-size:0.88rem;">{r["Matière"]}</span>
-                  {bar}
-                </div>
-                <div style="display:flex;gap:5px;align-items:center;">
-                  {badge_c}{badge_d}{badge_abs}
-                  <span style="font-size:0.78rem;color:#6b7280;margin-left:2px;">/ {r["total"]}</span>
-                </div>
-              </div>
-              <div style="margin-top:7px;line-height:2;">{pills_c}{pills_d}{pills_abs}</div>
-            </div>""", unsafe_allow_html=True)
+        pills_c = "".join(eleve_pill(e, "C") for e in r["eleves_c"])
+        pills_d = "".join(eleve_pill(e, "D") for e in r["eleves_d"])
+        pills_abs = "".join(eleve_pill(e, "ABS") for e in r.get("eleves_abs", []))
+        pills_c_comp = "".join(eleve_pill(e, "C", compensated=True) for e in r.get("eleves_c_comp", []))
+        pills_d_comp = "".join(eleve_pill(e, "D", compensated=True) for e in r.get("eleves_d_comp", []))
+
+        badge_c   = f'<span class="badge badge-C">{r["nb_c"]}</span>' if r["nb_c"] else ""
+        badge_d   = f'<span class="badge badge-D">{r["nb_d"]}</span>' if r["nb_d"] else ""
+        badge_abs = f'<span class="badge badge-ABS">{r["nb_abs"]}</span>' if r.get("nb_abs") else ""
+        nb_comp = len(r.get("eleves_c_comp", [])) + len(r.get("eleves_d_comp", []))
+        badge_comp = f'<span class="badge badge-COMP">⚖️ {nb_comp} compensé(s)</span>' if nb_comp else ""
+
+        bar_width = int(r["total_rattrapage"] / max(recap_rows[0]["total_rattrapage"], 1) * 100)
+        bar_c   = int(r["nb_c"] / max(r["total_rattrapage"], 1) * bar_width)
+        bar_d   = int(r["nb_d"] / max(r["total_rattrapage"], 1) * bar_width)
+        bar_abs = bar_width - bar_c - bar_d
+        bar = (
+            f'<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;'
+            f'width:{bar_width}%;min-width:4px;margin-top:5px;">'
+            f'<div style="flex:{bar_c} 0 0;background:#f59e0b;"></div>'
+            f'<div style="flex:{bar_d} 0 0;background:#ef4444;"></div>'
+            f'<div style="flex:{bar_abs} 0 0;background:#f97316;"></div>'
+            f'</div>'
+        )
+
+        all_pills = pills_c + pills_d + pills_abs + pills_c_comp + pills_d_comp
+
+        st.markdown(f"""
+        <div style="background:{bg};border-radius:10px;padding:10px 16px;
+                    margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;">
+              <span style="font-weight:700;font-size:0.88rem;">{r["Matière"]}</span>
+              {bar}
+            </div>
+            <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+              {badge_c}{badge_d}{badge_abs}{badge_comp}
+              <span style="font-size:0.78rem;color:#6b7280;margin-left:2px;">/ {r["total_rattrapage"]}</span>
+            </div>
+          </div>
+          <div style="margin-top:7px;line-height:2;">{all_pills}</div>
+        </div>""", unsafe_allow_html=True)
 
 # ─── MAILS ───────────────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -476,19 +817,38 @@ st.markdown('<div class="section-title">✉️ Mails de convocation aux rattrapa
 if filtered_df.empty:
     st.info("Aucun étudiant sélectionné — ajustez les filtres.")
 else:
-    # Toggle HORS des expanders : un changement régénère toutes les clés des text_area
     tutoyer    = st.toggle("👋 Tutoyer les étudiants (sinon vouvoiement)", value=False)
     toggle_key = "tu" if tutoyer else "vous"
 
-    students_with_rattrapage = [
-        (row["Prénom"], row["Nom"],
-         [c for c in eval_display_cols if str(row.get(c, "")).strip() in ("C", "D", "ABS")])
-        for _, row in filtered_df.iterrows()
-    ]
+    students_with_rattrapage = []
+    for _, row in filtered_df.iterrows():
+        student_key = f"{row['Prénom']} {row['Nom']}"
+        # Matières C/D/ABS non compensées
+        matieres = []
+        for c in eval_display_cols:
+            grade = str(row.get(c, "")).strip()
+            if grade not in ("C", "D", "ABS"):
+                continue
+            # Vérifier compensation
+            compensated = False
+            if use_compensation and student_ue_results:
+                ue_res = student_ue_results.get(student_key, {})
+                for ue_name, result in ue_res.items():
+                    if result["validated"] and result["compensation"]:
+                        for e in result["elements"]:
+                            if c.lower() in e["element"].lower() or e["element"].lower() in c.lower():
+                                compensated = True
+                                break
+                    if compensated:
+                        break
+            if not compensated:
+                matieres.append(c)
+        students_with_rattrapage.append((row["Prénom"], row["Nom"], matieres))
+
     students_with_rattrapage = [(p, n, m) for p, n, m in students_with_rattrapage if m]
 
     if not students_with_rattrapage:
-        st.info("Aucun étudiant avec C ou D dans les matières actives.")
+        st.info("✅ Aucun étudiant avec C ou D non compensé dans les matières actives.")
     else:
         for prenom, nom, matieres in students_with_rattrapage:
             with st.expander(f"📧 {prenom} {nom}  —  {len(matieres)} matière(s)"):
@@ -506,7 +866,6 @@ else:
                     "Contenu du mail (modifiable) :",
                     value=mail_text,
                     height=280,
-                    # La clé intègre toggle_key → Streamlit recharge value à chaque changement
                     key=f"mail_{toggle_key}_{prenom}_{nom}",
                 )
                 dl_col, copy_col = st.columns([2, 1])
@@ -519,8 +878,6 @@ else:
                         key=f"dl_{toggle_key}_{prenom}_{nom}",
                     )
                 with copy_col:
-                    # Bouton copier via JS — encode le texte en base64 pour éviter les problèmes de quotes
-                    import base64
                     b64 = base64.b64encode(edited_mail.encode("utf-8")).decode()
                     copy_id = f"copy_{toggle_key}_{prenom}_{nom}".replace(" ", "_").replace("-", "_")
                     st.markdown(f"""
@@ -553,16 +910,21 @@ st.markdown('<div class="section-title">📣 Récap convocations — mail à la 
 if filtered_df.empty or not recap_rows:
     st.info("Aucune donnée à afficher — ajustez les filtres.")
 else:
-    # Construire le texte du récap
     lines = ["Bonjour à tous,",
              "",
              "Voici le récapitulatif des rattrapages par matière :",
              ""]
 
     for r in recap_rows:
+        if r["total_rattrapage"] == 0:
+            continue
         all_students = r["eleves_c"] + r["eleves_d"] + r.get("eleves_abs", [])
         noms_liste   = ", ".join(all_students)
-        lines.append(f"• {r['Matière']} : {noms_liste}")
+        comp_note = ""
+        comp_students = r.get("eleves_c_comp", []) + r.get("eleves_d_comp", [])
+        if comp_students:
+            comp_note = f" [compensé(s) : {', '.join(comp_students)}]"
+        lines.append(f"• {r['Matière']} : {noms_liste}{comp_note}")
 
     lines += [
         "",
@@ -575,7 +937,6 @@ else:
 
     recap_classe_text = "\n".join(lines)
 
-    # Affichage + édition
     edited_recap = st.text_area(
         "Contenu du mail (modifiable) :",
         value=recap_classe_text,
@@ -583,7 +944,6 @@ else:
         key="recap_classe_textarea",
     )
 
-    import base64
     dl_col2, copy_col2 = st.columns([2, 1])
     with dl_col2:
         st.download_button(
@@ -624,15 +984,12 @@ st.markdown('<div class="section-title">🗓️ Rattrapages pouvant être organi
 st.markdown(
     "<p style='font-size:0.85rem;color:#6b7280;margin-bottom:1rem;'>"
     "Deux matières sont <strong>compatibles</strong> (peuvent avoir lieu en même temps) "
-    "si elles n'ont <strong>aucun élève en commun</strong> parmi les convoqués (C, D ou ABS)."
+    "si elles n'ont <strong>aucun élève en commun</strong> parmi les convoqués (C, D ou ABS) "
+    "<strong>non compensés</strong>."
     "</p>", unsafe_allow_html=True
 )
 
 if not filtered_df.empty and recap_rows:
-    import itertools
-
-    # Construire le dictionnaire matière → ensemble d'élèves convoqués
-    rattrapage_vals = {"C", "D", "ABS"}
     mat_students = {}
     for r in recap_rows:
         eleves = set(r["eleves_c"] + r["eleves_d"] + r.get("eleves_abs", []))
@@ -644,12 +1001,9 @@ if not filtered_df.empty and recap_rows:
     if len(matieres_list) < 2:
         st.info("Pas assez de matières avec rattrapages pour calculer des compatibilités.")
     else:
-        # Construire les groupes compatibles par coloration gloutonne (graph coloring greedy)
-        # Deux matières incompatibles = elles partagent au moins un élève
         def sont_compatibles(m1, m2):
             return mat_students[m1].isdisjoint(mat_students[m2])
 
-        # Groupes : liste de listes de matières pouvant toutes se tenir en même temps
         groupes = []
         reste = list(matieres_list)
         while reste:
@@ -660,15 +1014,14 @@ if not filtered_df.empty and recap_rows:
             groupes.append(groupe)
             reste = [m for m in reste if m not in groupe]
 
-        # Couleurs de créneaux
         slot_colors = [
-            ("#ede9fe", "#4f46e5", "#c4b5fd"),  # violet
-            ("#d1fae5", "#065f46", "#6ee7b7"),  # vert
-            ("#dbeafe", "#1e3a8a", "#93c5fd"),  # bleu
-            ("#fef3c7", "#78350f", "#fcd34d"),  # jaune
-            ("#fee2e2", "#7f1d1d", "#fca5a5"),  # rouge
-            ("#f3e8ff", "#581c87", "#d8b4fe"),  # mauve
-            ("#ffedd5", "#7c2d12", "#fb923c"),  # orange
+            ("#ede9fe", "#4f46e5", "#c4b5fd"),
+            ("#d1fae5", "#065f46", "#6ee7b7"),
+            ("#dbeafe", "#1e3a8a", "#93c5fd"),
+            ("#fef3c7", "#78350f", "#fcd34d"),
+            ("#fee2e2", "#7f1d1d", "#fca5a5"),
+            ("#f3e8ff", "#581c87", "#d8b4fe"),
+            ("#ffedd5", "#7c2d12", "#fb923c"),
         ]
 
         st.markdown(
@@ -684,7 +1037,6 @@ if not filtered_df.empty and recap_rows:
             for m in groupe:
                 all_eleves_creneau |= mat_students[m]
 
-            # Construire le HTML sans f-string multi-ligne imbriqué (évite le rendu texte brut)
             lignes_parts = []
             for m in groupe:
                 eleves_m = sorted(mat_students[m])
@@ -705,9 +1057,6 @@ if not filtered_df.empty and recap_rows:
                 )
             lignes_html = "".join(lignes_parts)
 
-            nb_mat_creneau  = len(groupe)
-            nb_elev_creneau = len(all_eleves_creneau)
-
             card = (
                 '<div style="background:' + bg + ';border:1.5px solid ' + border
                 + ';border-radius:12px;padding:14px 18px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);">'
@@ -715,18 +1064,15 @@ if not filtered_df.empty and recap_rows:
                 + '<span style="background:' + fg + ';color:white;border-radius:8px;padding:3px 12px;font-weight:800;font-size:0.9rem;">'
                 + 'Créneau ' + str(i + 1) + '</span>'
                 + '<span style="font-size:0.82rem;color:' + fg + ';font-weight:600;">'
-                + str(nb_mat_creneau) + ' matière(s) · ' + str(nb_elev_creneau) + ' élève(s) au total'
+                + str(len(groupe)) + ' matière(s) · ' + str(len(all_eleves_creneau)) + ' élève(s) au total'
                 + '</span></div>'
                 + lignes_html
                 + '</div>'
             )
             st.markdown(card, unsafe_allow_html=True)
 
-
-        # Matrice de compatibilité
         with st.expander("🔍 Voir la matrice de compatibilité complète"):
             n = len(matieres_list)
-            # En-tête
             th = "".join(
                 f'<th style="background:#4f46e5;color:white;padding:5px 8px;'
                 f'font-size:0.7rem;text-align:center;white-space:nowrap;'
