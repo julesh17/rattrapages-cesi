@@ -123,41 +123,179 @@ def generate_email(prenom: str, nom: str, matieres: list, tutoyer: bool) -> str:
     return f"{intro}\n\n{corps1}\n\n{liste}\n\n{corps2}\n\n{sign}"
 
 
-def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+def df_to_excel_bytes(
+    df: pd.DataFrame,
+    student_ue_results: dict = None,
+    eval_display_cols: list = None,
+    use_compensation: bool = False,
+) -> bytes:
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Résultats")
-        ws = writer.sheets["Résultats"]
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
+
+        # ── Feuille 1 : tableau des mentions ──────────────────────────────────
+        df.to_excel(writer, index=False, sheet_name="Mentions")
+        ws = writer.sheets["Mentions"]
 
         header_fill = PatternFill("solid", fgColor="4F46E5")
+        thin   = Side(style="thin", color="D1D5DB")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        fill_map = {
+            "A":   PatternFill("solid", fgColor="D1FAE5"),
+            "B":   PatternFill("solid", fgColor="DBEAFE"),
+            "C":   PatternFill("solid", fgColor="FEF3C7"),
+            "D":   PatternFill("solid", fgColor="FEE2E2"),
+            "ABS": PatternFill("solid", fgColor="FFEDD5"),
+        }
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF", size=10)
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        fill_map = {
-            "A": PatternFill("solid", fgColor="D1FAE5"),
-            "B": PatternFill("solid", fgColor="DBEAFE"),
-            "C": PatternFill("solid", fgColor="FEF3C7"),
-            "D": PatternFill("solid", fgColor="FEE2E2"),
-        }
-        thin   = Side(style="thin", color="D1D5DB")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
         for row in ws.iter_rows(min_row=2):
             for cell in row:
                 cell.border = border
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 if cell.value in fill_map:
                     cell.fill = fill_map[cell.value]
-
-        ws.column_dimensions["A"].width = 22
-        ws.column_dimensions["B"].width = 22
+        ws.column_dimensions["A"].width = 18
+        ws.column_dimensions["B"].width = 18
         for i in range(3, ws.max_column + 1):
-            ws.column_dimensions[get_column_letter(i)].width = 30
-        ws.row_dimensions[1].height = 50
+            ws.column_dimensions[get_column_letter(i)].width = 28
+        ws.row_dimensions[1].height = 45
+
+        # ── Feuille 2 : rattrapages après compensation ─────────────────────────
+        if use_compensation and student_ue_results and eval_display_cols:
+            rows_export = []
+            for _, row in df.iterrows():
+                student_key = f"{row['Prénom']} {row['Nom']}"
+                ue_res = student_ue_results.get(student_key, {})
+
+                def mat_is_compensated(col_short):
+                    for result in ue_res.values():
+                        if result["validated"] and result["compensation"]:
+                            for e in result["elements"]:
+                                if col_short.lower() in e["element"].lower() or e["element"].lower() in col_short.lower():
+                                    return True
+                    return False
+
+                matieres_rattrapage = []
+                matieres_compensees = []
+                for col in eval_display_cols:
+                    grade = str(row.get(col, "")).strip()
+                    if grade in ("C", "D", "ABS"):
+                        if mat_is_compensated(col):
+                            matieres_compensees.append(col)
+                        else:
+                            matieres_rattrapage.append(col)
+
+                rows_export.append({
+                    "Prénom": row["Prénom"],
+                    "Nom":    row["Nom"],
+                    "Matières en rattrapage": ", ".join(matieres_rattrapage) if matieres_rattrapage else "—",
+                    "Nb rattrapages": len(matieres_rattrapage),
+                    "Matières compensées (dispensées)": ", ".join(matieres_compensees) if matieres_compensees else "—",
+                    "Nb compensées": len(matieres_compensees),
+                })
+
+            df_rattrap = pd.DataFrame(rows_export)
+            # Trier : ceux avec rattrapages d'abord, puis par nb décroissant
+            df_rattrap = df_rattrap.sort_values(["Nb rattrapages", "Nom"], ascending=[False, True])
+            df_rattrap.to_excel(writer, index=False, sheet_name="Rattrapages")
+
+            ws2 = writer.sheets["Rattrapages"]
+            purple_fill = PatternFill("solid", fgColor="4F46E5")
+            orange_fill = PatternFill("solid", fgColor="FEE2E2")
+            green_fill  = PatternFill("solid", fgColor="D1FAE5")
+            comp_fill   = PatternFill("solid", fgColor="E0E7FF")
+
+            for cell in ws2[1]:
+                cell.font = Font(bold=True, color="FFFFFF", size=10)
+                cell.fill = purple_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws2.row_dimensions[1].height = 40
+
+            for row_cells in ws2.iter_rows(min_row=2):
+                nb_rattrap_val = row_cells[3].value  # colonne "Nb rattrapages"
+                nb_comp_val    = row_cells[5].value  # colonne "Nb compensées"
+                for cell in row_cells:
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                # Surligner la ligne selon statut
+                if nb_rattrap_val and nb_rattrap_val > 0:
+                    for cell in row_cells:
+                        cell.fill = orange_fill
+                elif nb_comp_val and nb_comp_val > 0:
+                    for cell in row_cells:
+                        cell.fill = comp_fill
+                else:
+                    for cell in row_cells:
+                        cell.fill = green_fill
+                # Centrer les chiffres
+                row_cells[3].alignment = Alignment(horizontal="center", vertical="center")
+                row_cells[5].alignment = Alignment(horizontal="center", vertical="center")
+
+            ws2.column_dimensions["A"].width = 16
+            ws2.column_dimensions["B"].width = 16
+            ws2.column_dimensions["C"].width = 45
+            ws2.column_dimensions["D"].width = 14
+            ws2.column_dimensions["E"].width = 45
+            ws2.column_dimensions["F"].width = 14
+
+            # ── Feuille 3 : UE par étudiant ────────────────────────────────────
+            rows_ue = []
+            for _, row in df.iterrows():
+                student_key = f"{row['Prénom']} {row['Nom']}"
+                ue_res = student_ue_results.get(student_key, {})
+                for ue_name, result in ue_res.items():
+                    if result["weighted_avg"] is None:
+                        continue
+                    rows_ue.append({
+                        "Prénom": row["Prénom"],
+                        "Nom":    row["Nom"],
+                        "UE": ue_name,
+                        "Mention UE": result["mention"] or "—",
+                        "Moy. pondérée": round(result["weighted_avg"], 2) if result["weighted_avg"] else None,
+                        "Statut": (
+                            "Validée par compensation" if result["validated"] and result["compensation"]
+                            else "Validée" if result["validated"]
+                            else "Non validée"
+                        ),
+                    })
+            if rows_ue:
+                df_ue = pd.DataFrame(rows_ue)
+                df_ue.to_excel(writer, index=False, sheet_name="Résultats UE")
+                ws3 = writer.sheets["Résultats UE"]
+                for cell in ws3[1]:
+                    cell.font = Font(bold=True, color="FFFFFF", size=10)
+                    cell.fill = purple_fill
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                ws3.row_dimensions[1].height = 35
+
+                statut_fills = {
+                    "Validée par compensation": PatternFill("solid", fgColor="E0E7FF"),
+                    "Validée":                  PatternFill("solid", fgColor="D1FAE5"),
+                    "Non validée":              PatternFill("solid", fgColor="FEE2E2"),
+                }
+                for row_cells in ws3.iter_rows(min_row=2):
+                    statut_val = row_cells[5].value if len(row_cells) > 5 else None
+                    row_fill = statut_fills.get(statut_val, PatternFill())
+                    for cell in row_cells:
+                        cell.border = border
+                        cell.alignment = Alignment(horizontal="left", vertical="center")
+                        cell.fill = row_fill
+                    if len(row_cells) > 3:
+                        row_cells[3].alignment = Alignment(horizontal="center", vertical="center")
+                    if len(row_cells) > 4:
+                        row_cells[4].alignment = Alignment(horizontal="center", vertical="center")
+                ws3.column_dimensions["A"].width = 16
+                ws3.column_dimensions["B"].width = 16
+                ws3.column_dimensions["C"].width = 40
+                ws3.column_dimensions["D"].width = 12
+                ws3.column_dimensions["E"].width = 14
+                ws3.column_dimensions["F"].width = 24
+
     buf.seek(0)
     return buf.read()
 
@@ -668,7 +806,12 @@ st.markdown('<div class="section-title">📥 Export Excel</div>', unsafe_allow_h
 if not filtered_df.empty:
     st.download_button(
         label="⬇️ Télécharger le tableau filtré (.xlsx)",
-        data=df_to_excel_bytes(filtered_df),
+        data=df_to_excel_bytes(
+            filtered_df,
+            student_ue_results=student_ue_results,
+            eval_display_cols=eval_display_cols,
+            use_compensation=use_compensation,
+        ),
         file_name="rattrapages_filtrés.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -677,9 +820,21 @@ if not filtered_df.empty:
 st.markdown("---")
 st.markdown('<div class="section-title">📊 Récapitulatif des matières en rattrapage</div>', unsafe_allow_html=True)
 
+
+def is_compensated(student_name, element_short):
+    """Retourne True si cet élément est compensé pour cet étudiant."""
+    ue_res = student_ue_results.get(student_name, {})
+    for result in ue_res.values():
+        if result["validated"] and result["compensation"]:
+            for e in result["elements"]:
+                if element_short.lower() in e["element"].lower() or e["element"].lower() in element_short.lower():
+                    return True
+    return False
+
+
 recap_rows = []
 if not filtered_df.empty:
-    for col in eval_display_cols:
+    for col in eval_display_cols:  # eval_display_cols tient déjà compte des exclusions
         eleves_c = [
             f"{row['Prénom']} {row['Nom']}"
             for _, row in filtered_df.iterrows()
@@ -695,16 +850,8 @@ if not filtered_df.empty:
             for _, row in filtered_df.iterrows()
             if str(row.get(col, "")).strip() == "ABS"
         ]
-        # Filtrer ceux compensés si actif
+        # Appliquer la compensation si activée
         if use_compensation and student_ue_results:
-            def is_compensated(student_name, element_name):
-                ue_res = student_ue_results.get(student_name, {})
-                for ue_name, result in ue_res.items():
-                    if result["validated"] and result["compensation"]:
-                        for e in result["elements"]:
-                            if element_name.lower() in e["element"].lower() or e["element"].lower() in element_name.lower():
-                                return True
-                return False
             eleves_c_comp   = [e for e in eleves_c   if is_compensated(e, col)]
             eleves_d_comp   = [e for e in eleves_d   if is_compensated(e, col)]
             eleves_c_nocomp = [e for e in eleves_c   if not is_compensated(e, col)]
@@ -823,26 +970,14 @@ else:
     students_with_rattrapage = []
     for _, row in filtered_df.iterrows():
         student_key = f"{row['Prénom']} {row['Nom']}"
-        # Matières C/D/ABS non compensées
         matieres = []
-        for c in eval_display_cols:
+        for c in eval_display_cols:  # déjà filtré selon les exclusions
             grade = str(row.get(c, "")).strip()
             if grade not in ("C", "D", "ABS"):
                 continue
-            # Vérifier compensation
-            compensated = False
-            if use_compensation and student_ue_results:
-                ue_res = student_ue_results.get(student_key, {})
-                for ue_name, result in ue_res.items():
-                    if result["validated"] and result["compensation"]:
-                        for e in result["elements"]:
-                            if c.lower() in e["element"].lower() or e["element"].lower() in c.lower():
-                                compensated = True
-                                break
-                    if compensated:
-                        break
-            if not compensated:
-                matieres.append(c)
+            if use_compensation and student_ue_results and is_compensated(student_key, c):
+                continue
+            matieres.append(c)
         students_with_rattrapage.append((row["Prénom"], row["Nom"], matieres))
 
     students_with_rattrapage = [(p, n, m) for p, n, m in students_with_rattrapage if m]
@@ -1072,37 +1207,64 @@ if not filtered_df.empty and recap_rows:
             st.markdown(card, unsafe_allow_html=True)
 
         with st.expander("🔍 Voir la matrice de compatibilité complète"):
-            n = len(matieres_list)
-            th = "".join(
-                f'<th style="background:#4f46e5;color:white;padding:5px 8px;'
-                f'font-size:0.7rem;text-align:center;white-space:nowrap;'
-                f'writing-mode:vertical-rl;transform:rotate(180deg);max-width:28px;">'
-                f'{m[:25]}</th>'
-                for m in matieres_list
+            # Légende numérotée
+            legend_parts = []
+            for idx_m, m in enumerate(matieres_list):
+                legend_parts.append(
+                    f'<div style="font-size:0.78rem;padding:2px 0;color:#374151;">'
+                    f'<span style="display:inline-block;width:30px;font-weight:800;color:#4f46e5;">M{idx_m+1}</span>'
+                    f'{m}</div>'
+                )
+            st.markdown(
+                '<div style="background:#f8fafc;border-radius:8px;padding:10px 14px;margin-bottom:12px;">'
+                '<div style="font-weight:700;font-size:0.82rem;color:#4f46e5;margin-bottom:6px;">Légende des matières</div>'
+                + "".join(legend_parts) + "</div>",
+                unsafe_allow_html=True
             )
-            header_row = f'<tr><th style="background:#4f46e5;"></th>{th}</tr>'
+
+            # En-têtes numérotés M1, M2...
+            th = "".join(
+                f'<th style="background:#4f46e5;color:white;padding:7px 4px;'
+                f'font-size:0.78rem;text-align:center;min-width:36px;font-weight:800;">'
+                f'M{idx_m+1}</th>'
+                for idx_m in range(len(matieres_list))
+            )
+            header_row = (
+                f'<tr><th style="background:#4f46e5;color:white;padding:7px 12px;'
+                f'font-size:0.78rem;text-align:left;white-space:nowrap;min-width:200px;">Matière</th>{th}</tr>'
+            )
 
             rows_html = ""
             for i_m, m1 in enumerate(matieres_list):
-                cells = f'<td style="font-weight:700;font-size:0.75rem;padding:4px 8px;white-space:nowrap;background:#f8fafc;">{m1[:30]}</td>'
+                row_label = (
+                    f'<td style="font-size:0.78rem;padding:5px 12px;white-space:nowrap;'
+                    f'background:#f1f5f9;border-right:2px solid #e2e8f0;">'
+                    f'<span style="color:#4f46e5;font-weight:800;margin-right:6px;">M{i_m+1}</span>'
+                    f'{m1}</td>'
+                )
+                cells = row_label
                 for j_m, m2 in enumerate(matieres_list):
                     if i_m == j_m:
-                        cells += '<td style="background:#e2e8f0;text-align:center;">—</td>'
+                        cells += '<td style="background:#e2e8f0;text-align:center;font-size:0.82rem;">—</td>'
                     elif sont_compatibles(m1, m2):
-                        cells += '<td style="background:#d1fae5;color:#065f46;text-align:center;font-weight:700;font-size:0.8rem;">✓</td>'
+                        cells += '<td style="background:#d1fae5;color:#065f46;text-align:center;font-weight:800;font-size:0.88rem;">✓</td>'
                     else:
                         nb_communs = len(mat_students[m1] & mat_students[m2])
-                        cells += f'<td style="background:#fee2e2;color:#7f1d1d;text-align:center;font-size:0.75rem;font-weight:600;">{nb_communs}</td>'
+                        cells += (
+                            f'<td style="background:#fee2e2;color:#7f1d1d;text-align:center;'
+                            f'font-size:0.8rem;font-weight:700;">{nb_communs}</td>'
+                        )
                 bg_row = "#f8fafc" if i_m % 2 == 0 else "white"
                 rows_html += f'<tr style="background:{bg_row}">{cells}</tr>'
 
-            st.markdown(f"""
-            <p style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">
-              ✓ = compatible (0 élève en commun) · chiffre = nb d'élèves en conflit
-            </p>
-            <div style="overflow-x:auto;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,0.08);">
-            <table style="border-collapse:collapse;font-family:sans-serif;">
-              <thead>{header_row}</thead><tbody>{rows_html}</tbody>
-            </table></div>""", unsafe_allow_html=True)
+            st.markdown(
+                '<p style="font-size:0.8rem;color:#6b7280;margin-bottom:6px;">'
+                '✓ = compatible (0 élève en commun) &nbsp;·&nbsp; chiffre = nb d\'élèves en conflit</p>'
+                '<div style="overflow-x:auto;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,0.08);">'
+                '<table style="border-collapse:collapse;font-family:sans-serif;">'
+                f'<thead>{header_row}</thead><tbody>{rows_html}</tbody>'
+                '</table></div>',
+                unsafe_allow_html=True
+            )
 else:
     st.info("Aucune donnée disponible — importez un fichier et appliquez les filtres.")
