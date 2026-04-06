@@ -726,7 +726,18 @@ st.markdown('<div class="section-title">✉️ Mails de convocation aux rattrapa
 if filtered_df.empty:
     st.info("Aucun étudiant sélectionné — ajustez les filtres.")
 else:
-    tutoyer = st.toggle("👋 Tutoyer les étudiants", value=False)
+    # On place le toggle et le bouton côte à côte
+    col_t, col_btn = st.columns([3, 1])
+    with col_t:
+        tutoyer = st.toggle("👋 Tutoyer les étudiants", value=False)
+    with col_btn:
+        if st.button("🔄 Rafraîchir les textes", help="Force la mise à jour des mails après un changement de filtre ou de compensation"):
+            # On vide le cache de Streamlit pour les champs textes des mails
+            for key in list(st.session_state.keys()):
+                if key.startswith("mail_") or key == "recap_classe":
+                    del st.session_state[key]
+            st.rerun() # Recharge la page immédiatement
+
     tkey    = "tu" if tutoyer else "vous"
 
     to_convoke = []
