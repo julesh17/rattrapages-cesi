@@ -771,14 +771,19 @@ if not recap_rows:
     st.info("Aucune donnée à afficher.")
 else:
     lines = ["Bonjour à tous,", "",
-             "Voici le récapitulatif des rattrapages par matière :", ""]
+             "Voici le récapitulatif des convocations aux rattrapages par matière :", ""]
+    
     for r in recap_rows:
+        # S'il n'y a aucun étudiant en rattrapage (hors compensations), on n'affiche pas la matière
         if r["total_rat"] == 0:
             continue
+            
+        # On regroupe UNIQUEMENT les élèves non compensés
         students = r["eleves_c"] + r["eleves_d"] + r["eleves_abs"]
-        comp_stu = r["eleves_c_comp"] + r["eleves_d_comp"]
-        note     = f" [compensé(s) : {', '.join(comp_stu)}]" if comp_stu else ""
-        lines.append(f"• {r['Matière']} : {', '.join(students)}{note}")
+        
+        # On ajoute la ligne sans mentionner les étudiants compensés pour éviter toute confusion
+        lines.append(f"• {r['Matière']} : {', '.join(students)}")
+        
     lines += ["", "Les étudiants concernés sont invités à se présenter aux sessions de rattrapage "
               "dont les modalités leur seront communiquées prochainement.",
               "", "Bien cordialement,", "L'équipe pédagogique"]
