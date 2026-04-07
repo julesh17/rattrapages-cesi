@@ -486,10 +486,10 @@ fc1, fc2 = st.columns(2)
 with fc1:
     st.markdown("""
     <div class="legend-row">
-      <div class="legend-item"><span class="dot dot-A"></span>A – Admis</div>
-      <div class="legend-item"><span class="dot dot-B"></span>B – Bien</div>
-      <div class="legend-item"><span class="dot dot-C"></span>C – Ajourné léger</div>
-      <div class="legend-item"><span class="dot dot-D"></span>D – Ajourné</div>
+      <div class="legend-item"><span class="dot dot-A"></span>A – Objectifs atteints</div>
+      <div class="legend-item"><span class="dot dot-B"></span>B – Objectifs partiellement atteints</div>
+      <div class="legend-item"><span class="dot dot-C"></span>C – Objectifs non atteints (écarts majeurs)</div>
+      <div class="legend-item"><span class="dot dot-D"></span>D – Objectifs non atteints (écarts critiques)</div>
       <div class="legend-item"><span class="dot dot-ABS"></span>ABS – Absent</div>
     </div>""", unsafe_allow_html=True)
     selected_grades = st.multiselect(
