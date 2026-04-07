@@ -6,6 +6,7 @@ Dépendances : pip install streamlit pandas openpyxl
 
 import io
 import re
+import math
 import base64
 import streamlit as st
 import pandas as pd
@@ -190,11 +191,11 @@ def compute_ue_result(grades_row: dict, ue_elements: list) -> dict:
         return {"mention": None, "weighted_avg": None, "elements": elements_data,
                 "validated": False, "compensation": False, "missing": True}
 
-    avg = weighted_sum / total_coeff
-    if   avg > 4.6: mention_ue, validated = "A", True
-    elif avg > 3.6: mention_ue, validated = "B", True
-    elif avg > 1.6: mention_ue, validated = "C", False
-    else:           mention_ue, validated = "D", False
+    avg = math.floor((weighted_sum / total_coeff) * 10) / 10  # arrondi au dixième inférieur
+    if   avg >= 4.6: mention_ue, validated = "A", True
+    elif avg >= 3.6: mention_ue, validated = "B", True
+    elif avg <  1.6: mention_ue, validated = "D", False
+    else:            mention_ue, validated = "C", False
 
     # ABS est traité comme D : il compte dans les matières à rattraper potentiellement compensées
     has_cd = any(e["mention"] in ("C", "D", "ABS") for e in elements_data if e["value"] is not None)
