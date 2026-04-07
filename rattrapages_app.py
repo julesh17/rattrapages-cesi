@@ -164,10 +164,17 @@ def compute_ue_result(grades_row: dict, ue_elements: list) -> dict:
     for ei in ue_elements:
         mention = match_element(ei["element"], grades_row)
         coeff   = ei["coeff"]
-        if mention is None or mention == "ABS":
+        if mention is None:
             elements_data.append({"element": ei["element"], "coeff": coeff,
-                                   "mention": mention or "—", "value": None})
+                                   "mention": "—", "value": None})
             missing = True
+        elif mention == "ABS":
+            # ABS compte comme D (valeur 1) pour le calcul de la moyenne UE
+            v = GRADE_VALUES["D"]
+            weighted_sum += v * coeff
+            total_coeff  += coeff
+            elements_data.append({"element": ei["element"], "coeff": coeff,
+                                   "mention": "ABS", "value": v})
         elif mention in GRADE_VALUES:
             v = GRADE_VALUES[mention]
             weighted_sum += v * coeff
@@ -189,7 +196,8 @@ def compute_ue_result(grades_row: dict, ue_elements: list) -> dict:
     elif avg > 1.6: mention_ue, validated = "C", False
     else:           mention_ue, validated = "D", False
 
-    has_cd = any(e["mention"] in ("C","D") for e in elements_data if e["value"] is not None)
+    # ABS est traité comme D : il compte dans les matières à rattraper potentiellement compensées
+    has_cd = any(e["mention"] in ("C", "D", "ABS") for e in elements_data if e["value"] is not None)
     compensation = validated and has_cd
 
     return {"mention": mention_ue, "weighted_avg": round(avg, 3),
