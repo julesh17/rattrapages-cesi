@@ -397,7 +397,7 @@ if not all_eval_cols:
 
 cfg1, cfg2, cfg3 = st.columns([1, 2, 2])
 with cfg1:
-    semestre = st.selectbox("📅 Semestre :", options=[5, 6, 7, 8], index=2)
+    semestre = st.selectbox("📅 Semestre :", options=[1, 2, 3, 4, 5, 6, 7, 8], index=4)
 
 GLOBAL_KW  = "Préparation à la certification (Global exam)"
 has_global = any(GLOBAL_KW.lower() in c.lower() for c in all_eval_cols)
