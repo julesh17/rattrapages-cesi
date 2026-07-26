@@ -1,126 +1,181 @@
-# 🎓 Application Streamlit – Gestion des rattrapages étudiants CESI
+<p align="center">
+<img src="readme-assets/hello.png" width="400">
+</p>
 
-## 🚀 Accès à l’application
+# Rattrapages CESI
 
-L’application est disponible en ligne (aucune installation nécessaire) :
-👉 https://rattrapages-cesi.streamlit.app
+Plateforme web développée pour simplifier l'organisation des rattrapages à CESI.
 
----
-
-## 📌 Présentation
-
-Cette application permet de :
-
-* Analyser les notes des étudiants
-* Identifier automatiquement les rattrapages (C, D, ABS)
-* Gérer les compensations par UE (Unités d’Enseignement)
-* Générer des mails de convocation personnalisés
-* Construire des créneaux d’examen sans conflit
-* Exporter les résultats en Excel
+L'application permet aux **Enseignants Responsables Pédagogiques (ERP)** et aux **Assistants Pédagogiques (AP)** d'identifier automatiquement les étudiants convoqués aux rattrapages, de prendre en compte les compensations entre éléments évaluables, de générer les convocations et de préparer les créneaux d'examen.
 
 ---
 
-## 🧩 Fonctionnalités principales
+## Accès à l'application
 
-### 1. Import des données
+L'application est destinée exclusivement aux équipes pédagogiques de CESI.
 
-* Fichier de notes (.xlsx) obligatoire
-* Fichier référentiel RN (.xlsx) optionnel (pour les compensations)
+Avant son utilisation, il est nécessaire de récupérer depuis la suite **FNG** :
 
-### 2. Configuration
+- le fichier de notes des étudiants ;
+- le référentiel (cahier des charges) correspondant au semestre.
 
-* Choix du semestre
-* Exclusion de matières (ex : Global exam)
-* Gestion des absences (cellules vides → ABS)
-
-### 3. Analyse des résultats
-
-* Tableau interactif des notes
-* Filtres par mention (A, B, C, D)
-* Filtre par groupe (admis / rattrapage)
-
-### 4. Compensations UE
-
-* Calcul automatique des moyennes pondérées
-* Détection des UE validées ou compensées
-* Visualisation détaillée par étudiant
-
-### 5. Récapitulatif par matière
-
-* Nombre d’étudiants en rattrapage
-* Distinction C / D / ABS
-* Identification des compensations
-
-### 6. Génération de mails
-
-* Mails individuels personnalisés
-* Mail récapitulatif pour la classe
-* Option tutoiement / vouvoiement
-* Copie rapide ou téléchargement
-
-### 7. Créneaux parallèles
-
-* Proposition de groupes de matières compatibles
-* Évite les conflits d’étudiants
-* Matrice de compatibilité complète
-
-### 8. Export Excel
-
-Contient plusieurs onglets :
-
-* **Vue complète** : tous les étudiants
-* **Mentions (filtrés)** : selon les filtres
-* **Rattrapages** : synthèse globale
-* **Résultats UE** : détails des compensations
+Ces deux fichiers constituent les données d'entrée de l'application.
 
 ---
 
-## ⚙️ Utilisation
+## Fonctionnalités
 
-1. Ouvrir l’application en ligne
-2. Importer le fichier de notes issu de Scholaris
-3. (Optionnel) Importer le référentiel RN issu d'une requête Bora
-4. Configurer les options
-5. Explorer les résultats dans les onglets
-6. Générer les mails ou exporter les données
+- Import des notes des étudiants
+- Import du référentiel (cahier des charges)
+- Calcul automatique des compensations entre éléments évaluables
+- Détermination des étudiants convoqués aux rattrapages
+- Visualisation détaillée des résultats par UE
+- Récapitulatif par matière
+- Génération automatique des mails de convocation
+- Proposition de créneaux parallèles compatibles
+- Export complet au format Excel
 
 ---
 
-## 💻 Lancement en local (optionnel)
+# Guide d'utilisation
 
-Si besoin, vous pouvez exécuter l’application localement :
+## 1. Récupération des données
 
-```bash
-pip install streamlit pandas openpyxl
-streamlit run rattrapages_app_v4.py
+Depuis la suite **FNG**, récupérer :
+
+- le fichier Excel contenant les notes des étudiants ;
+- le fichier Excel du référentiel (cahier des charges).
+
+---
+
+## 2. Import des fichiers
+
+Importer le fichier de notes.
+
+Importer ensuite le référentiel correspondant au semestre concerné.
+
+L'application vérifie automatiquement la cohérence des données importées.
+
+---
+
+## 3. Configuration
+
+Choisir :
+
+- le semestre ;
+- les matières à exclure si nécessaire ;
+- si les cellules vides doivent être considérées comme des absences ;
+- l'activation ou non des compensations entre éléments évaluables.
+
+---
+
+## 4. Analyse des résultats
+
+L'application calcule automatiquement :
+
+- les mentions obtenues ;
+- les UE validées ;
+- les UE validées par compensation ;
+- les UE non validées ;
+- les étudiants convoqués aux rattrapages.
+
+Les résultats sont présentés sous forme de tableaux et de synthèses graphiques.
+
+---
+
+## 5. Consultation des compensations
+
+L'onglet **Résultats UE** permet de consulter, pour chaque étudiant :
+
+- les éléments évaluables ;
+- les coefficients ;
+- la moyenne pondérée ;
+- la mention obtenue ;
+- le statut de validation de chaque UE.
+
+---
+
+## 6. Consultation des rattrapages
+
+L'onglet **Récapitulatif par matière** présente :
+
+- le nombre d'étudiants convoqués ;
+- la répartition des mentions C, D et ABS ;
+- les compensations éventuelles ;
+- la liste des étudiants concernés.
+
+---
+
+## 7. Génération des convocations
+
+L'application génère automatiquement :
+
+- les mails individuels de convocation ;
+- un mail récapitulatif destiné à la promotion.
+
+Les textes générés restent entièrement modifiables avant leur envoi.
+
+---
+
+## 8. Recherche de créneaux compatibles
+
+L'application analyse automatiquement les étudiants convoqués afin d'identifier les matières pouvant être programmées simultanément.
+
+Deux matières sont considérées comme compatibles lorsqu'aucun étudiant n'est convoqué aux deux rattrapages.
+
+Une matrice de compatibilité est également générée afin de faciliter l'organisation des examens.
+
+---
+
+## 9. Export Excel
+
+L'application génère un classeur Excel contenant plusieurs feuilles :
+
+- Vue complète des notes ;
+- Tableau filtré ;
+- Synthèse des rattrapages ;
+- Résultats détaillés des UE (si les compensations sont activées).
+
+---
+
+# Architecture
+
+L'application est développée en Python avec **Streamlit**.
+
+Les données sont entièrement traitées en mémoire à partir des fichiers Excel importés.
+
+```mermaid
+flowchart LR
+
+A[Fichier de notes]
+B[Référentiel]
+
+A --> C[Analyse des notes]
+B --> D[Analyse du référentiel]
+
+C --> E[Calcul des compensations]
+D --> E
+
+E --> F[Rattrapages]
+E --> G[Résultats UE]
+E --> H[Mails]
+E --> I[Créneaux compatibles]
+E --> J[Export Excel]
 ```
 
 ---
 
-## 📁 Dépendances
+## Technologies
 
-* streamlit
-* pandas
-* openpyxl
-
----
-
-## 📝 Remarques
-
-* Les mentions sont converties en valeurs pour les calculs :
-  A=5, B=4, C=2, D=1
-* Les ABS sont traités comme D dans les moyennes UE
-* Les compensations s’appliquent uniquement si l’UE est validée
+- Python
+- Streamlit
+- Pandas
+- OpenPyXL
+- Base64
+- Expressions régulières (re)
 
 ---
 
-## 👥 Public cible
+## Auteur
 
-* Enseignants Responsables Pédagogiques
-* Gestionnaires académiques
-
----
-
-## ✨ Objectif
-
-Simplifier et automatiser la gestion des rattrapages étudiants, tout en réduisant les erreurs et le temps de traitement.
+Projet développé par Jules Hamdan, ERP à CESI Toulouse, pour les équipes pédagogiques de CESI afin de simplifier l'organisation des rattrapages.
